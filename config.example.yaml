@@ -1,0 +1,22 @@
+# Example configuration for the pre-market screener.
+universe:
+  symbols:
+    - AAPL
+    - AMD
+    - TSLA
+criteria:
+  volume:
+    relative_to_30day_avg: 2.0
+    absolute_pre_market_shares: 150000
+  gap:
+    minimum_gap_percent: 3.5
+    require_above_vwap: true
+  minimum_float_shares: 12000000
+data:
+  provider: yfinance
+  # provider_options:
+  #   api_key_env: POLYGON_API_KEY  # required when provider: polygon
+  timezone: US/Eastern
+  premarket_window_start: "04:00"
+  premarket_window_end: "09:29"
+max_concurrent_requests: 8
