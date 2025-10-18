@@ -115,8 +115,8 @@ class PolygonProvider(DataProvider):
             datetime.combine(as_of.date(), self._config.premarket_window_end)
         )
 
-        start_utc = premarket_start.astimezone(timezone.utc).isoformat()
-        end_utc = premarket_end.astimezone(timezone.utc).isoformat()
+        start_utc = int(premarket_start.astimezone(timezone.utc).timestamp() * 1000)
+        end_utc = int(premarket_end.astimezone(timezone.utc).timestamp() * 1000)
 
         payload = self._request(
             f"/v2/aggs/ticker/{symbol}/range/5/minute/{start_utc}/{end_utc}",
