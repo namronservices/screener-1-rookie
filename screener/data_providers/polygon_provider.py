@@ -86,7 +86,7 @@ class PolygonProvider(DataProvider):
         )
 
     def _fetch_previous_close(self, symbol: str) -> float:
-        response = self._client.get_previous_close(symbol, adjusted=True)
+        response = self._call_previous_close(symbol)
         results = self._extract_results(response)
         if not results:
             raise RuntimeError(f"No previous close data returned for {symbol}")
@@ -94,6 +94,25 @@ class PolygonProvider(DataProvider):
         if close is None:
             raise RuntimeError(f"Previous close payload missing close price for {symbol}")
         return float(close)
+
+    def _call_previous_close(self, symbol: str):
+        client = self._client
+
+        if hasattr(client, "get_previous_close"):
+            return client.get_previous_close(symbol, adjusted=True)
+
+        stocks_client = getattr(client, "stocks", None)
+        if stocks_client is not None and hasattr(stocks_client, "get_previous_close"):
+            return stocks_client.get_previous_close(symbol, adjusted=True)
+
+        for candidate_name in ("get_previous_close_v2", "get_previous_close_agg"):
+            candidate = getattr(client, candidate_name, None)
+            if callable(candidate):
+                return candidate(symbol, adjusted=True)
+
+        raise RuntimeError(
+            "Polygon REST client does not expose a previous close endpoint compatible with this provider"
+        )
 
     def _fetch_daily_aggregates(self, symbol: str, as_of: datetime) -> list[int]:
         start_date = (as_of - timedelta(days=60)).date().isoformat()
