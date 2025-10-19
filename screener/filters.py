@@ -37,7 +37,7 @@ def build_filters(criteria: ScreenerCriteria) -> Iterable[Filter]:
     )
     yield Filter(
         name="gap_size",
-        predicate=lambda snap: snap.gap_percent >= gap_rules.minimum_gap_percent,
+        predicate=lambda snap: abs(snap.gap_percent) >= gap_rules.minimum_gap_percent,
     )
     if gap_rules.require_above_vwap:
         yield Filter(
