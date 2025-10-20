@@ -249,12 +249,17 @@ class PolygonProvider(DataProvider):
     # ------------------------------------------------------------------
     def _fetch_premarket_bars(self, symbol: str, as_of: datetime) -> list[HistoricalBar]:
         localized_as_of = self._ensure_timezone(as_of)
-        session_date = localized_as_of.astimezone(self._session_tz).date()
+        session_local = localized_as_of.astimezone(self._session_tz)
+        session_date = session_local.date()
         premarket_start = self._combine_with_timezone(session_date, self._config.premarket_window_start)
         premarket_end = self._combine_with_timezone(session_date, self._config.premarket_window_end)
 
+        effective_premarket_end = premarket_end
+        if premarket_start <= session_local <= premarket_end:
+            effective_premarket_end = session_local
+
         start_utc = premarket_start.astimezone(timezone.utc)
-        end_utc = premarket_end.astimezone(timezone.utc)
+        end_utc = effective_premarket_end.astimezone(timezone.utc)
 
         payload = self._request(
             f"/v2/aggs/ticker/{symbol}/range/1/minute/{self._format_epoch_millis(start_utc)}/{self._format_epoch_millis(end_utc)}",
@@ -272,7 +277,7 @@ class PolygonProvider(DataProvider):
                 continue
             utc_time = datetime.fromtimestamp(millis / 1000, tz=timezone.utc)
             local_time = utc_time.astimezone(self._session_tz)
-            if local_time < premarket_start or local_time > premarket_end:
+            if local_time < premarket_start or local_time > effective_premarket_end:
                 continue
 
             bars.append(
