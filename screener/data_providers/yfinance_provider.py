@@ -48,13 +48,20 @@ class YFinanceProvider(DataProvider):
 
         intraday = ticker.history(period="5d", interval="5m")
         intraday = intraday.tz_convert(self._config.timezone)
+        if as_of.tzinfo is None:
+            session_local = self._session_tz.localize(as_of)
+        else:
+            session_local = as_of.astimezone(self._session_tz)
         premarket_start = self._session_tz.localize(
-            datetime.combine(as_of.date(), self._config.premarket_window_start)
+            datetime.combine(session_local.date(), self._config.premarket_window_start)
         )
         premarket_end = self._session_tz.localize(
-            datetime.combine(as_of.date(), self._config.premarket_window_end)
+            datetime.combine(session_local.date(), self._config.premarket_window_end)
         )
-        premarket_data = intraday.loc[premarket_start:premarket_end]
+        effective_premarket_end = premarket_end
+        if premarket_start <= session_local <= premarket_end:
+            effective_premarket_end = session_local
+        premarket_data = intraday.loc[premarket_start:effective_premarket_end]
         if premarket_data.empty:
             raise RuntimeError(f"No premarket data returned for {symbol}")
         last_row = premarket_data.iloc[-1]
