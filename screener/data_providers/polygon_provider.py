@@ -234,7 +234,7 @@ class PolygonProvider(DataProvider):
         end_utc = premarket_end.astimezone(timezone.utc)
 
         payload = self._request(
-            f"/v2/aggs/ticker/{symbol}/range/1/minute/{self._format_timestamp(start_utc)}/{self._format_timestamp(end_utc)}",
+            f"/v2/aggs/ticker/{symbol}/range/1/minute/{self._format_epoch_millis(start_utc)}/{self._format_epoch_millis(end_utc)}",
             {"adjusted": True, "sort": "asc", "limit": 5000},
         )
 
@@ -307,10 +307,9 @@ class PolygonProvider(DataProvider):
         return PolygonProvider._ensure_timezone(moment).astimezone(timezone.utc).date()
 
     @staticmethod
-    def _format_timestamp(moment: datetime) -> str:
-        moment = PolygonProvider._ensure_timezone(moment).astimezone(timezone.utc).replace(microsecond=0)
-        iso = moment.isoformat()
-        if iso.endswith("+00:00"):
-            return iso[:-6] + "Z"
-        return iso
+    def _format_epoch_millis(moment: datetime) -> str:
+        moment = PolygonProvider._ensure_timezone(moment).astimezone(timezone.utc)
+        epoch_seconds = moment.timestamp()
+        millis = int(round(epoch_seconds * 1000))
+        return str(millis)
 
