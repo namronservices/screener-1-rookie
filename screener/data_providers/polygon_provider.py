@@ -63,7 +63,7 @@ class PolygonProvider(DataProvider):
         return None
 
     def fetch_snapshot(self, symbol: str, as_of: datetime) -> PreMarketSnapshot:
-        previous_close = self._fetch_previous_close(symbol)
+        previous_close = self._fetch_previous_close(symbol, as_of)
         daily_volumes = self._fetch_daily_aggregates(symbol, as_of)
 
         intraday_bars = self._fetch_premarket_bars(symbol, as_of)
@@ -85,19 +85,31 @@ class PolygonProvider(DataProvider):
             intraday_bars=intraday_bars,
         )
 
-    def _fetch_previous_close(self, symbol: str) -> float:
-        response = self._call_previous_close(symbol)
-        results = self._extract_results(response)
-        if results:
-            close = self._extract_field(results[0], "close", "c")
+    def _fetch_previous_close(self, symbol: str, as_of: datetime) -> float:
+        strategies = (
+            lambda: self._fetch_previous_close_via_endpoint(symbol),
+            lambda: self._fetch_previous_close_from_aggregates(symbol, as_of),
+            lambda: self._fetch_previous_close_from_open_close(symbol, as_of),
+        )
+        for strategy in strategies:
+            close = strategy()
             if close is not None:
-                return float(close)
-
-        fallback_close = self._fetch_previous_close_from_open_close(symbol)
-        if fallback_close is not None:
-            return fallback_close
+                return close
 
         raise RuntimeError(f"No previous close data returned for {symbol}")
+
+    def _fetch_previous_close_via_endpoint(self, symbol: str) -> float | None:
+        response = self._call_previous_close(symbol)
+        results = self._extract_results(response)
+        if not results:
+            return None
+        close = self._extract_field(results[0], "close", "c")
+        if close is None:
+            return None
+        try:
+            return float(close)
+        except (TypeError, ValueError):
+            return None
 
     def _call_previous_close(self, symbol: str):
         client = self._client
@@ -118,8 +130,8 @@ class PolygonProvider(DataProvider):
             "Polygon REST client does not expose a previous close endpoint compatible with this provider"
         )
 
-    def _fetch_previous_close_from_open_close(self, symbol: str) -> float | None:
-        previous_session = self._resolve_previous_session_date()
+    def _fetch_previous_close_from_open_close(self, symbol: str, as_of: datetime) -> float | None:
+        previous_session = self._resolve_previous_session_date(symbol, as_of)
         if previous_session is None:
             return None
 
@@ -147,14 +159,53 @@ class PolygonProvider(DataProvider):
 
         return None
 
-    def _resolve_previous_session_date(self) -> date | None:
-        reference = datetime.now(self._session_tz)
-        candidate = reference.date() - timedelta(days=1)
-        for _ in range(10):
-            if candidate.weekday() < 5:
-                return candidate
-            candidate -= timedelta(days=1)
+    def _fetch_previous_close_from_aggregates(self, symbol: str, as_of: datetime) -> float | None:
+        for entry in self._iter_recent_daily_aggregates(symbol, as_of):
+            session_date = self._extract_aggregate_date(entry)
+            if session_date is None or session_date >= as_of.date():
+                continue
+            close = self._extract_field(entry, "close", "c")
+            if close is None:
+                continue
+            try:
+                return float(close)
+            except (TypeError, ValueError):
+                continue
         return None
+
+    def _resolve_previous_session_date(self, symbol: str, as_of: datetime) -> date | None:
+        for entry in self._iter_recent_daily_aggregates(symbol, as_of):
+            session_date = self._extract_aggregate_date(entry)
+            if session_date is not None and session_date < as_of.date():
+                return session_date
+        return None
+
+    def _iter_recent_daily_aggregates(self, symbol: str, as_of: datetime):
+        end_date = (as_of.date() - timedelta(days=1)).isoformat()
+        start_date = (as_of.date() - timedelta(days=90)).isoformat()
+        response = self._client.get_aggs(
+            symbol,
+            1,
+            "day",
+            start_date,
+            end_date,
+            adjusted=True,
+            sort="desc",
+            limit=30,
+        )
+        results = self._extract_results(response)
+        for entry in results:
+            yield entry
+
+    def _extract_aggregate_date(self, entry) -> date | None:
+        timestamp_raw = self._extract_field(entry, "timestamp", "t")
+        if timestamp_raw is None:
+            return None
+        try:
+            timestamp_int = int(timestamp_raw)
+        except (TypeError, ValueError):
+            return None
+        return datetime.fromtimestamp(timestamp_int / 1000, tz=timezone.utc).date()
 
     def _fetch_daily_aggregates(self, symbol: str, as_of: datetime) -> list[int]:
         start_date = (as_of - timedelta(days=60)).date().isoformat()
