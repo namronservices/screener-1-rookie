@@ -1,33 +1,30 @@
-"""Polygon.io backed :class:`DataProvider` implementation."""
+"""Polygon.io backed :class:`DataProvider` implementation.
+
+This module deliberately talks to the documented REST endpoints instead of the
+auto-generated SDK so the behaviour mirrors the official HTTP reference:
+https://polygon.io/docs/rest/stocks/overview
+"""
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 from functools import cached_property
-from typing import Sequence
+from typing import Iterable, Mapping, Sequence
+
+import requests
 
 from ..analyzers import HistoricalBar, build_snapshot
 from ..config import DataAcquisition
 from ..models import PreMarketSnapshot
 from .base import DataProvider
 
-try:  # pragma: no cover - optional dependency
-    from polygon import RESTClient
-except Exception as exc:  # pragma: no cover - optional dependency guard
-    RESTClient = None
-    _IMPORT_ERROR = exc
-else:  # pragma: no cover
-    _IMPORT_ERROR = None
-
 
 class PolygonProvider(DataProvider):
     """Fetches pre-market market data from the Polygon.io REST API."""
 
-    def __init__(self, config: DataAcquisition) -> None:
-        if RESTClient is None:  # pragma: no cover - executed when dependency missing
-            raise RuntimeError(
-                "polygon-api-client is required for PolygonProvider but could not be imported"
-            ) from _IMPORT_ERROR
+    _API_BASE = "https://api.polygon.io"
+    _DEFAULT_TIMEOUT = 10.0
 
+    def __init__(self, config: DataAcquisition) -> None:
         self._config = config
         self._api_key = self._resolve_api_key()
         if not self._api_key:
@@ -35,7 +32,10 @@ class PolygonProvider(DataProvider):
                 "PolygonProvider requires an API key via provider_options['api_key'], "
                 "provider_options['api_key_env'], or the POLYGON_API_KEY environment variable."
             )
-        self._client = RESTClient(api_key=self._api_key)
+
+        self._session = requests.Session()
+        # Default API key parameter applied to all requests.
+        self._session.params = {"apiKey": self._api_key}
 
     def _resolve_api_key(self) -> str | None:
         options = dict(self._config.provider_options or {})
@@ -54,21 +54,30 @@ class PolygonProvider(DataProvider):
         return os.getenv("POLYGON_API_KEY")
 
     @cached_property
-    def _session_tz(self):  # pragma: no cover - timezone conversion not deterministic
-        import pytz
+    def _session_tz(self):  # pragma: no cover - timezone conversion depends on OS data
+        try:
+            from zoneinfo import ZoneInfo
 
-        return pytz.timezone(self._config.timezone)
+            return ZoneInfo(self._config.timezone)
+        except Exception:  # pragma: no cover - fallback used on older Python builds
+            import pytz
 
-    def warm_cache(self, symbols: Sequence[str], as_of: datetime) -> None:  # pragma: no cover - API handles caching
+            return pytz.timezone(self._config.timezone)
+
+    def warm_cache(self, symbols: Sequence[str], as_of: datetime) -> None:  # pragma: no cover - REST API has no cache priming
         return None
 
+    # ------------------------------------------------------------------
+    # Public entry point
+    # ------------------------------------------------------------------
     def fetch_snapshot(self, symbol: str, as_of: datetime) -> PreMarketSnapshot:
         previous_close = self._fetch_previous_close(symbol, as_of)
-        daily_volumes = self._fetch_daily_aggregates(symbol, as_of)
+        daily_volumes = self._fetch_thirty_day_volumes(symbol, as_of)
 
         intraday_bars = self._fetch_premarket_bars(symbol, as_of)
         if not intraday_bars:
             raise RuntimeError(f"No premarket data returned for {symbol}")
+
         premarket_volume = sum(bar.volume for bar in intraday_bars)
         last_price = intraday_bars[-1].close
 
@@ -85,244 +94,223 @@ class PolygonProvider(DataProvider):
             intraday_bars=intraday_bars,
         )
 
+    # ------------------------------------------------------------------
+    # Polygon REST helpers
+    # ------------------------------------------------------------------
+    def _request(self, path: str, params: Mapping[str, object] | None = None) -> Mapping[str, object] | Iterable[object]:
+        url = f"{self._API_BASE}{path if path.startswith('/') else '/' + path}"
+        merged_params: dict[str, object] = dict(self._session.params)
+        if params:
+            merged_params.update({k: self._stringify_param(v) for k, v in params.items() if v is not None})
+
+        try:
+            response = self._session.get(url, params=merged_params, timeout=self._DEFAULT_TIMEOUT)
+            response.raise_for_status()
+        except requests.RequestException as exc:  # pragma: no cover - network issues are environment specific
+            raise RuntimeError(f"Polygon request to {path} failed") from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"Polygon response from {path} was not valid JSON") from exc
+
+        if isinstance(payload, Mapping):
+            status = payload.get("status")
+            if isinstance(status, str) and status.upper() == "ERROR":
+                detail = payload.get("error") or payload.get("message") or "Unknown error"
+                raise RuntimeError(f"Polygon error for {path}: {detail}")
+        return payload
+
+    @staticmethod
+    def _stringify_param(value: object) -> object:
+        if isinstance(value, bool):
+            return str(value).lower()
+        return value
+
+    @staticmethod
+    def _coerce_results(payload: Mapping[str, object] | Iterable[object]) -> list[Mapping[str, object]]:
+        if isinstance(payload, Mapping):
+            results = payload.get("results")
+            if results is None:
+                return []
+        else:
+            results = payload
+
+        if isinstance(results, Mapping):
+            return [results]
+        return [entry for entry in results if isinstance(entry, Mapping)]
+
+    @staticmethod
+    def _safe_float(value: object) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _safe_int(value: object) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    # ------------------------------------------------------------------
+    # Previous close resolution
+    # ------------------------------------------------------------------
     def _fetch_previous_close(self, symbol: str, as_of: datetime) -> float:
-        strategies = (
-            lambda: self._fetch_previous_close_via_endpoint(symbol),
-            lambda: self._fetch_previous_close_from_aggregates(symbol, as_of),
-            lambda: self._fetch_previous_close_from_open_close(symbol, as_of),
+        as_of_date = self._as_date(as_of)
+
+        payload = self._request(
+            f"/v2/aggs/ticker/{symbol}/prev",
+            {"adjusted": True, "timestamp": as_of_date.isoformat()},
         )
-        for strategy in strategies:
-            close = strategy()
+        for entry in self._coerce_results(payload):
+            candidate = entry.get("close") or entry.get("c")
+            close = self._safe_float(candidate)
+            if close is not None:
+                return close
+
+        # Fallback by scanning recent trading sessions via daily aggregates.
+        for entry in self._iter_recent_daily_aggs(symbol, as_of_date, days=15):
+            session_date = self._extract_aggregate_date(entry)
+            if session_date is None or session_date >= as_of_date:
+                continue
+            close = self._safe_float(entry.get("close") or entry.get("c"))
             if close is not None:
                 return close
 
         raise RuntimeError(f"No previous close data returned for {symbol}")
 
-    def _fetch_previous_close_via_endpoint(self, symbol: str) -> float | None:
-        response = self._call_previous_close(symbol)
-        results = self._extract_results(response)
-        if not results:
-            return None
-        close = self._extract_field(results[0], "close", "c")
-        if close is None:
+    def _iter_recent_daily_aggs(self, symbol: str, as_of: date, days: int) -> Iterable[Mapping[str, object]]:
+        end_date = (as_of - timedelta(days=1)).isoformat()
+        start_date = (as_of - timedelta(days=max(days, 1) + 30)).isoformat()
+        payload = self._request(
+            f"/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}",
+            {"adjusted": True, "sort": "desc", "limit": days + 30},
+        )
+        return self._coerce_results(payload)
+
+    @staticmethod
+    def _extract_aggregate_date(entry: Mapping[str, object]) -> date | None:
+        timestamp = entry.get("timestamp") or entry.get("t")
+        if timestamp is None:
             return None
         try:
-            return float(close)
+            millis = int(timestamp)
         except (TypeError, ValueError):
             return None
+        return datetime.fromtimestamp(millis / 1000, tz=timezone.utc).date()
 
-    def _call_previous_close(self, symbol: str):
-        client = self._client
-
-        if hasattr(client, "get_previous_close"):
-            return client.get_previous_close(symbol, adjusted=True)
-
-        stocks_client = getattr(client, "stocks", None)
-        if stocks_client is not None and hasattr(stocks_client, "get_previous_close"):
-            return stocks_client.get_previous_close(symbol, adjusted=True)
-
-        for candidate_name in ("get_previous_close_v2", "get_previous_close_agg"):
-            candidate = getattr(client, candidate_name, None)
-            if callable(candidate):
-                return candidate(symbol, adjusted=True)
-
-        raise RuntimeError(
-            "Polygon REST client does not expose a previous close endpoint compatible with this provider"
+    # ------------------------------------------------------------------
+    # Historical context
+    # ------------------------------------------------------------------
+    def _fetch_thirty_day_volumes(self, symbol: str, as_of: datetime) -> list[int]:
+        as_of_date = self._as_date(as_of)
+        start_date = (as_of_date - timedelta(days=120)).isoformat()
+        payload = self._request(
+            f"/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{as_of_date.isoformat()}",
+            {"adjusted": True, "sort": "asc", "limit": 180},
         )
-
-    def _fetch_previous_close_from_open_close(self, symbol: str, as_of: datetime) -> float | None:
-        previous_session = self._resolve_previous_session_date(symbol, as_of)
-        if previous_session is None:
-            return None
-
-        response = self._call_daily_open_close(symbol, previous_session.isoformat())
-        if not response:
-            return None
-
-        close = self._extract_field(response, "close", "c")
-        if close is None:
-            return None
-        try:
-            return float(close)
-        except (TypeError, ValueError):
-            return None
-
-    def _call_daily_open_close(self, symbol: str, session_date: str):
-        client = self._client
-
-        if hasattr(client, "get_daily_open_close"):
-            return client.get_daily_open_close(symbol, session_date, adjusted=True)
-
-        stocks_client = getattr(client, "stocks", None)
-        if stocks_client is not None and hasattr(stocks_client, "get_daily_open_close"):
-            return stocks_client.get_daily_open_close(symbol, session_date, adjusted=True)
-
-        return None
-
-    def _fetch_previous_close_from_aggregates(self, symbol: str, as_of: datetime) -> float | None:
-        for entry in self._iter_recent_daily_aggregates(symbol, as_of):
-            session_date = self._extract_aggregate_date(entry)
-            if session_date is None or session_date >= as_of.date():
-                continue
-            close = self._extract_field(entry, "close", "c")
-            if close is None:
-                continue
-            try:
-                return float(close)
-            except (TypeError, ValueError):
-                continue
-        return None
-
-    def _resolve_previous_session_date(self, symbol: str, as_of: datetime) -> date | None:
-        for entry in self._iter_recent_daily_aggregates(symbol, as_of):
-            session_date = self._extract_aggregate_date(entry)
-            if session_date is not None and session_date < as_of.date():
-                return session_date
-        return None
-
-    def _iter_recent_daily_aggregates(self, symbol: str, as_of: datetime):
-        end_date = (as_of.date() - timedelta(days=1)).isoformat()
-        start_date = (as_of.date() - timedelta(days=90)).isoformat()
-        response = self._client.get_aggs(
-            symbol,
-            1,
-            "day",
-            start_date,
-            end_date,
-            adjusted=True,
-            sort="desc",
-            limit=30,
-        )
-        results = self._extract_results(response)
-        for entry in results:
-            yield entry
-
-    def _extract_aggregate_date(self, entry) -> date | None:
-        timestamp_raw = self._extract_field(entry, "timestamp", "t")
-        if timestamp_raw is None:
-            return None
-        try:
-            timestamp_int = int(timestamp_raw)
-        except (TypeError, ValueError):
-            return None
-        return datetime.fromtimestamp(timestamp_int / 1000, tz=timezone.utc).date()
-
-    def _fetch_daily_aggregates(self, symbol: str, as_of: datetime) -> list[int]:
-        start_date = (as_of - timedelta(days=60)).date().isoformat()
-        end_date = as_of.date().isoformat()
-        response = self._client.get_aggs(
-            symbol,
-            1,
-            "day",
-            start_date,
-            end_date,
-            adjusted=True,
-            sort="asc",
-            limit=200,
-        )
-        results = self._extract_results(response)
+        results = self._coerce_results(payload)
         if not results:
             raise RuntimeError(f"No historical daily data returned for {symbol}")
-        volumes = []
+
+        volumes: list[int] = []
         for entry in results[-30:]:
-            volume = self._extract_field(entry, "volume", "v")
-            volumes.append(int(volume or 0))
+            volume = self._safe_int(entry.get("volume") or entry.get("v"))
+            volumes.append(volume or 0)
         return volumes
 
+    # ------------------------------------------------------------------
+    # Intraday bars
+    # ------------------------------------------------------------------
     def _fetch_premarket_bars(self, symbol: str, as_of: datetime) -> list[HistoricalBar]:
-        premarket_start = self._session_tz.localize(
-            datetime.combine(as_of.date(), self._config.premarket_window_start)
-        )
-        premarket_end = self._session_tz.localize(
-            datetime.combine(as_of.date(), self._config.premarket_window_end)
+        localized_as_of = self._ensure_timezone(as_of)
+        session_date = localized_as_of.astimezone(self._session_tz).date()
+        premarket_start = self._combine_with_timezone(session_date, self._config.premarket_window_start)
+        premarket_end = self._combine_with_timezone(session_date, self._config.premarket_window_end)
+
+        start_utc = premarket_start.astimezone(timezone.utc)
+        end_utc = premarket_end.astimezone(timezone.utc)
+
+        payload = self._request(
+            f"/v2/aggs/ticker/{symbol}/range/1/minute/{self._format_timestamp(start_utc)}/{self._format_timestamp(end_utc)}",
+            {"adjusted": True, "sort": "asc", "limit": 5000},
         )
 
-        premarket_start_utc = premarket_start.astimezone(timezone.utc)
-        premarket_end_utc = premarket_end.astimezone(timezone.utc)
-        start_utc = int(premarket_start_utc.timestamp() * 1000)
-        end_utc = int(premarket_end_utc.timestamp() * 1000)
-
-        response = self._client.get_aggs(
-            symbol,
-            5,
-            "minute",
-            premarket_start_utc.isoformat(),
-            premarket_end_utc.isoformat(),
-            adjusted=True,
-            sort="asc",
-            limit=5000,
-        )
-        results = self._extract_results(response)
         bars: list[HistoricalBar] = []
-        for entry in results:
-            timestamp_raw = self._extract_field(entry, "timestamp", "t")
-            if timestamp_raw is None:
+        for entry in self._coerce_results(payload):
+            timestamp = entry.get("timestamp") or entry.get("t")
+            if timestamp is None:
                 continue
-            timestamp = datetime.fromtimestamp(int(timestamp_raw) / 1000, tz=timezone.utc).astimezone(
-                self._session_tz
-            )
-            if timestamp < premarket_start or timestamp > premarket_end:
+            try:
+                millis = int(timestamp)
+            except (TypeError, ValueError):
                 continue
+            utc_time = datetime.fromtimestamp(millis / 1000, tz=timezone.utc)
+            local_time = utc_time.astimezone(self._session_tz)
+            if local_time < premarket_start or local_time > premarket_end:
+                continue
+
             bars.append(
                 HistoricalBar(
-                    timestamp=timestamp,
-                    open=float(self._extract_field(entry, "open", "o") or 0.0),
-                    high=float(self._extract_field(entry, "high", "h") or 0.0),
-                    low=float(self._extract_field(entry, "low", "l") or 0.0),
-                    close=float(self._extract_field(entry, "close", "c") or 0.0),
-                    volume=int(self._extract_field(entry, "volume", "v") or 0),
+                    timestamp=local_time,
+                    open=self._safe_float(entry.get("open") or entry.get("o")) or 0.0,
+                    high=self._safe_float(entry.get("high") or entry.get("h")) or 0.0,
+                    low=self._safe_float(entry.get("low") or entry.get("l")) or 0.0,
+                    close=self._safe_float(entry.get("close") or entry.get("c")) or 0.0,
+                    volume=self._safe_int(entry.get("volume") or entry.get("v")) or 0,
                 )
             )
         return bars
 
+    def _combine_with_timezone(self, session_date: date, session_time) -> datetime:
+        naive = datetime.combine(session_date, session_time)
+        tz = self._session_tz
+        localize = getattr(tz, "localize", None)
+        if callable(localize):  # pragma: no cover - exercised only when pytz is installed
+            return localize(naive)
+        return naive.replace(tzinfo=tz)
+
+    # ------------------------------------------------------------------
+    # Reference data
+    # ------------------------------------------------------------------
     def _fetch_float_shares(self, symbol: str) -> int:
-        response = self._client.get_ticker_details(symbol)
-        result = self._ensure_mapping(response)
-        candidates = [
-            result.get("share_class_shares_outstanding"),
-            result.get("weighted_shares_outstanding"),
-            result.get("shares_outstanding"),
-        ]
-        for candidate in candidates:
-            if candidate:
-                return int(candidate)
+        payload = self._request(f"/v3/reference/tickers/{symbol}")
+        if not isinstance(payload, Mapping):
+            return 0
+        result = payload.get("results")
+        if not isinstance(result, Mapping):
+            return 0
+
+        for key in (
+            "share_class_shares_outstanding",
+            "weighted_shares_outstanding",
+            "shares_outstanding",
+        ):
+            value = self._safe_int(result.get(key))
+            if value:
+                return value
         return 0
 
-    def _extract_results(self, response) -> list:
-        if response is None:
-            return []
-        results = getattr(response, "results", None)
-        if results is None and isinstance(response, dict):
-            results = response.get("results")
-        if results is None:
-            return []
-        if isinstance(results, list):
-            return results
-        return list(results)
+    # ------------------------------------------------------------------
+    # Time handling helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _ensure_timezone(moment: datetime) -> datetime:
+        if moment.tzinfo is None:
+            return moment.replace(tzinfo=timezone.utc)
+        return moment
 
-    def _ensure_mapping(self, entry) -> dict:
-        if isinstance(entry, dict):
-            return entry
-        for method_name in ("to_dict", "dict", "model_dump"):
-            method = getattr(entry, method_name, None)
-            if callable(method):
-                try:
-                    candidate = method()
-                except TypeError:
-                    continue
-                if isinstance(candidate, dict):
-                    return candidate
-        return {}
+    @staticmethod
+    def _as_date(moment: datetime) -> date:
+        return PolygonProvider._ensure_timezone(moment).astimezone(timezone.utc).date()
 
-    def _extract_field(self, entry, *names):
-        mapping = self._ensure_mapping(entry)
-        for name in names:
-            if hasattr(entry, name):
-                value = getattr(entry, name)
-                if value is not None and not callable(value):
-                    return value
-            if name in mapping and mapping[name] is not None:
-                value = mapping[name]
-                if not callable(value):
-                    return value
-        return None
+    @staticmethod
+    def _format_timestamp(moment: datetime) -> str:
+        moment = PolygonProvider._ensure_timezone(moment).astimezone(timezone.utc).replace(microsecond=0)
+        iso = moment.isoformat()
+        if iso.endswith("+00:00"):
+            return iso[:-6] + "Z"
+        return iso
+
