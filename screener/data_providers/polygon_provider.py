@@ -1,7 +1,7 @@
 """Polygon.io backed :class:`DataProvider` implementation."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import cached_property
 from typing import Sequence
 
@@ -88,12 +88,16 @@ class PolygonProvider(DataProvider):
     def _fetch_previous_close(self, symbol: str) -> float:
         response = self._call_previous_close(symbol)
         results = self._extract_results(response)
-        if not results:
-            raise RuntimeError(f"No previous close data returned for {symbol}")
-        close = self._extract_field(results[0], "close", "c")
-        if close is None:
-            raise RuntimeError(f"Previous close payload missing close price for {symbol}")
-        return float(close)
+        if results:
+            close = self._extract_field(results[0], "close", "c")
+            if close is not None:
+                return float(close)
+
+        fallback_close = self._fetch_previous_close_from_open_close(symbol)
+        if fallback_close is not None:
+            return fallback_close
+
+        raise RuntimeError(f"No previous close data returned for {symbol}")
 
     def _call_previous_close(self, symbol: str):
         client = self._client
@@ -113,6 +117,44 @@ class PolygonProvider(DataProvider):
         raise RuntimeError(
             "Polygon REST client does not expose a previous close endpoint compatible with this provider"
         )
+
+    def _fetch_previous_close_from_open_close(self, symbol: str) -> float | None:
+        previous_session = self._resolve_previous_session_date()
+        if previous_session is None:
+            return None
+
+        response = self._call_daily_open_close(symbol, previous_session.isoformat())
+        if not response:
+            return None
+
+        close = self._extract_field(response, "close", "c")
+        if close is None:
+            return None
+        try:
+            return float(close)
+        except (TypeError, ValueError):
+            return None
+
+    def _call_daily_open_close(self, symbol: str, session_date: str):
+        client = self._client
+
+        if hasattr(client, "get_daily_open_close"):
+            return client.get_daily_open_close(symbol, session_date, adjusted=True)
+
+        stocks_client = getattr(client, "stocks", None)
+        if stocks_client is not None and hasattr(stocks_client, "get_daily_open_close"):
+            return stocks_client.get_daily_open_close(symbol, session_date, adjusted=True)
+
+        return None
+
+    def _resolve_previous_session_date(self) -> date | None:
+        reference = datetime.now(self._session_tz)
+        candidate = reference.date() - timedelta(days=1)
+        for _ in range(10):
+            if candidate.weekday() < 5:
+                return candidate
+            candidate -= timedelta(days=1)
+        return None
 
     def _fetch_daily_aggregates(self, symbol: str, as_of: datetime) -> list[int]:
         start_date = (as_of - timedelta(days=60)).date().isoformat()
