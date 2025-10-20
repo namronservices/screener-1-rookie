@@ -107,7 +107,30 @@ class PolygonProvider(DataProvider):
             response = self._session.get(url, params=merged_params, timeout=self._DEFAULT_TIMEOUT)
             response.raise_for_status()
         except requests.RequestException as exc:  # pragma: no cover - network issues are environment specific
-            raise RuntimeError(f"Polygon request to {path} failed") from exc
+            # Try to collect as much useful context as possible for debugging.
+            status = None
+            text_snippet = None
+            try:
+                resp = getattr(exc, "response", None) or response
+                if resp is not None:
+                    status = getattr(resp, "status_code", None)
+                    full_text = getattr(resp, "text", None)
+                    if isinstance(full_text, str):
+                        text_snippet = full_text[:1000].replace("\n", " ")
+            except Exception:
+                # best-effort only; don't obscure the original exception
+                pass
+
+            detail_parts = [
+                f"path={path}",
+                f"url={url}",
+                f"params={merged_params}",
+                f"status={status}" if status is not None else None,
+                f"response_snippet={text_snippet}" if text_snippet else None,
+                f"error={exc}",
+            ]
+            detail = ", ".join(p for p in detail_parts if p)
+            raise RuntimeError(f"Polygon request failed: {detail}") from exc
 
         try:
             payload = response.json()
