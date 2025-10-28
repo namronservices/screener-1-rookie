@@ -23,6 +23,10 @@ class DataProvider(ABC):
     def warm_cache(self, symbols: Sequence[str], as_of: datetime) -> None:
         """Optional hook to pre-fetch data for improved latency."""
 
+    @abstractmethod
+    def discover_symbols(self, cap_size: str, limit: int) -> Sequence[str]:
+        """Return a list of tickers that fit the requested market-cap bucket."""
+
 
 class InMemoryProvider(DataProvider):
     """Test double that serves deterministic data from dictionaries."""
@@ -42,3 +46,9 @@ class InMemoryProvider(DataProvider):
 
     def warm_cache(self, symbols: Sequence[str], as_of: datetime) -> None:  # pragma: no cover - no-op
         return None
+
+    def discover_symbols(self, cap_size: str, limit: int) -> Sequence[str]:
+        del cap_size  # pragma: no cover - deterministic behaviour
+        if limit <= 0:
+            return []
+        return list(self._snapshots)[:limit]

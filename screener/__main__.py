@@ -68,7 +68,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         extra={"as_of": as_of.isoformat() if as_of else None},
     )
     results = engine.run(as_of=as_of)
-    rows = [summarize(result) for result in results]
+    rows = [summarize(result) for result in results[: config.max_report_rows]]
     print(render_table(rows))
     has_actionable = any(result.is_actionable() for result in results)
     return 0 if has_actionable else 1

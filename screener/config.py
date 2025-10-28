@@ -11,34 +11,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, time
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping
 
 
 @dataclass(frozen=True)
 class SymbolUniverse:
-    """Definition of what tickers should be evaluated.
+    """Definition of how the screener should select tickers."""
 
-    Attributes
-    ----------
-    symbols:
-        Primary list of tickers to screen. These are typically the small and
-        mid-cap equities of interest to the desk.
-    include_etfs:
-        Some desks like to include ETFs in the scan as a liquidity proxy. The
-        flag is provided for easy extension even though the default scan focuses
-        on equities only.
-    """
-
-    symbols: Sequence[str]
-    include_etfs: bool = False
+    cap_size: str
+    max_symbols: int = 50
 
     def __post_init__(self) -> None:
-        cleaned = tuple(sym.strip().upper() for sym in self.symbols)
-        if len(cleaned) == 0:
-            raise ValueError("At least one symbol must be provided")
-        if any(not sym for sym in cleaned):
-            raise ValueError("Empty symbol detected after stripping whitespace")
-        object.__setattr__(self, "symbols", cleaned)
+        cleaned = self.cap_size.strip().lower()
+        if not cleaned:
+            raise ValueError("A market-cap size must be provided")
+        if self.max_symbols <= 0:
+            raise ValueError("max_symbols must be a positive integer")
+        object.__setattr__(self, "cap_size", cleaned)
 
 
 @dataclass(frozen=True)
@@ -102,19 +91,15 @@ class ScreenerConfig:
     criteria: ScreenerCriteria = field(default_factory=ScreenerCriteria)
     data: DataAcquisition = field(default_factory=DataAcquisition)
     max_concurrent_requests: int = 8
+    max_report_rows: int = 10
 
     def validate(self) -> None:
         self.universe
         self.criteria.validate()
         if self.max_concurrent_requests <= 0:
             raise ValueError("Concurrency must be positive")
-
-    @classmethod
-    def from_symbols(cls, symbols: Iterable[str], **overrides: object) -> "ScreenerConfig":
-        """Helper for quick instantiation with minimal boilerplate."""
-
-        universe = SymbolUniverse(tuple(symbols))
-        return cls(universe=universe, **overrides)
+        if self.max_report_rows <= 0:
+            raise ValueError("max_report_rows must be positive")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "ScreenerConfig":
@@ -147,15 +132,14 @@ class ScreenerConfig:
         criteria_map = ensure_mapping(data.get("criteria"), "criteria")
         data_map = ensure_mapping(data.get("data"), "data")
 
-        raw_symbols = universe_map.get("symbols", ())
-        if isinstance(raw_symbols, str):
-            raw_symbols = [raw_symbols]
-        if not isinstance(raw_symbols, Iterable):
-            raise TypeError("universe.symbols must be an iterable of strings")
-        symbols = tuple(str(sym) for sym in raw_symbols)
+        cap_size_value = universe_map.get("cap_size")
+        if cap_size_value is None:
+            raise ValueError("universe.cap_size must be provided")
+        cap_size = str(cap_size_value)
+        max_symbols = int(universe_map.get("max_symbols", 50))
         universe = SymbolUniverse(
-            symbols=symbols,
-            include_etfs=bool(universe_map.get("include_etfs", False)),
+            cap_size=cap_size,
+            max_symbols=max_symbols,
         )
 
         volume_defaults = VolumeThresholds()
@@ -214,6 +198,7 @@ class ScreenerConfig:
             criteria=criteria,
             data=data_config,
             max_concurrent_requests=int(data.get("max_concurrent_requests", 8)),
+            max_report_rows=int(data.get("max_report_rows", 10)),
         )
         config.validate()
         return config

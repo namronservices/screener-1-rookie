@@ -72,6 +72,12 @@ class PolygonProvider(DataProvider):
     def warm_cache(self, symbols: Sequence[str], as_of: datetime) -> None:  # pragma: no cover - REST API has no cache priming
         return None
 
+    def discover_symbols(self, cap_size: str, limit: int) -> Sequence[str]:
+        del cap_size, limit  # pragma: no cover - polygon discovery not implemented
+        raise NotImplementedError(
+            "Symbol discovery by market cap is not implemented for PolygonProvider"
+        )
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------

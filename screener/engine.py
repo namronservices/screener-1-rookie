@@ -34,8 +34,22 @@ class ScreenerEngine:
         logger.info("Running screener engine", extra={"as_of": as_of.isoformat()})
 
         provider = self._provider_factory(self._config.data)
-        logger.debug("Warming provider cache", extra={"symbols": list(self._config.universe.symbols)})
-        provider.warm_cache(self._config.universe.symbols, as_of)
+        universe = self._config.universe
+        logger.info(
+            "Discovering symbols for universe",
+            extra={"cap_size": universe.cap_size, "limit": universe.max_symbols},
+        )
+        symbols = provider.discover_symbols(universe.cap_size, universe.max_symbols)
+        unique_symbols = tuple(dict.fromkeys(sym.strip().upper() for sym in symbols if sym))
+        if not unique_symbols:
+            logger.warning(
+                "No symbols discovered for configured cap size",
+                extra={"cap_size": universe.cap_size},
+            )
+            return []
+
+        logger.debug("Warming provider cache", extra={"symbols": list(unique_symbols)})
+        provider.warm_cache(unique_symbols, as_of)
 
         filters = tuple(build_filters(self._config.criteria))
         logger.debug(
@@ -47,7 +61,7 @@ class ScreenerEngine:
         with ThreadPoolExecutor(max_workers=self._config.max_concurrent_requests) as pool:
             future_map = {
                 pool.submit(provider.fetch_snapshot, symbol, as_of): symbol
-                for symbol in self._config.universe.symbols
+                for symbol in unique_symbols
             }
             for future in as_completed(future_map):
                 symbol = future_map[future]
@@ -80,6 +94,8 @@ class ScreenerEngine:
             results,
             key=lambda r: (
                 not r.is_actionable(),
+                -sum(1 for passed in r.passed_filters.values() if passed),
                 -(r.snapshot.gap_percent if r.snapshot else 0.0),
+                r.symbol,
             ),
         )

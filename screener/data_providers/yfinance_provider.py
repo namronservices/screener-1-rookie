@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from datetime import datetime
 from functools import cached_property
 from typing import Sequence
@@ -21,9 +22,22 @@ except Exception as exc:  # pragma: no cover - best effort import guard
 else:  # pragma: no cover - no easy deterministic coverage
     _IMPORT_ERROR = None
 
+import requests
+
 
 class YFinanceProvider(DataProvider):
     """Loads pre-market data via Yahoo Finance."""
+
+    _SCREENER_URL = "https://query2.finance.yahoo.com/v1/finance/screener"
+    _SCREENER_LIMIT = 100
+    _CAP_SIZE_FILTERS = {
+        "mega": {"min": 200_000_000_000},
+        "large": {"min": 10_000_000_000},
+        "mid": {"min": 2_000_000_000, "max": 10_000_000_000},
+        "small": {"min": 300_000_000, "max": 2_000_000_000},
+        "micro": {"max": 300_000_000},
+    }
+    _DISCOVERY_TIMEOUT = 10.0
 
     def __init__(self, config: DataAcquisition) -> None:
         if yf is None:  # pragma: no cover - executed only without dependency
@@ -40,6 +54,79 @@ class YFinanceProvider(DataProvider):
 
     def warm_cache(self, symbols: Sequence[str], as_of: datetime) -> None:  # pragma: no cover - yfinance caches automatically
         return None
+
+    def discover_symbols(self, cap_size: str, limit: int) -> Sequence[str]:
+        if limit <= 0:
+            return []
+
+        normalized = cap_size.strip().lower()
+        bounds = self._CAP_SIZE_FILTERS.get(normalized)
+        if bounds is None:
+            available = ", ".join(sorted(self._CAP_SIZE_FILTERS))
+            raise ValueError(
+                f"Unsupported cap size '{cap_size}'. Available options: {available}"
+            )
+
+        operands = [
+            {"operator": "eq", "operands": ["region", "us"]},
+            {"operator": "eq", "operands": ["quoteType", "EQUITY"]},
+        ]
+        minimum = bounds.get("min")
+        maximum = bounds.get("max")
+        if minimum is not None:
+            operands.append({"operator": "gt", "operands": ["marketcap", minimum]})
+        if maximum is not None:
+            operands.append({"operator": "lt", "operands": ["marketcap", maximum]})
+
+        payload = {
+            "offset": 0,
+            "size": min(limit, self._SCREENER_LIMIT),
+            "sortField": "marketcap",
+            "sortType": "DESC",
+            "quoteType": "EQUITY",
+            "query": {"operator": "AND", "operands": operands},
+        }
+
+        try:
+            response = requests.post(
+                self._SCREENER_URL, json=payload, timeout=self._DISCOVERY_TIMEOUT
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:  # pragma: no cover - depends on network
+            logger.exception(
+                "Failed to query Yahoo Finance screener",
+                extra={"cap_size": normalized, "limit": limit},
+            )
+            raise RuntimeError("Failed to discover symbols from Yahoo Finance") from exc
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            logger.exception("Invalid JSON returned from Yahoo Finance screener")
+            raise RuntimeError("Yahoo Finance screener returned invalid JSON") from exc
+
+        results = (
+            (data or {})
+            .get("finance", {})
+            .get("result", [{}])[0]
+            .get("quotes", [])
+        )
+        ordered: "OrderedDict[str, None]" = OrderedDict()
+        for entry in results:
+            symbol = str(entry.get("symbol", "")).strip().upper()
+            if not symbol:
+                continue
+            ordered.setdefault(symbol, None)
+            if len(ordered) >= limit:
+                break
+
+        discovered = list(ordered)
+        if not discovered:
+            logger.warning(
+                "Yahoo Finance screener returned no symbols",
+                extra={"cap_size": normalized},
+            )
+        return discovered
 
     def fetch_snapshot(self, symbol: str, as_of: datetime) -> PreMarketSnapshot:
         logger.info(

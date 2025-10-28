@@ -1,9 +1,7 @@
 # Example configuration for the pre-market screener.
 universe:
-  symbols:
-    - AAPL
-    - AMD
-    - TSLA
+  cap_size: mid
+  max_symbols: 50
 criteria:
   volume:
     relative_to_30day_avg: 2.0
@@ -20,3 +18,4 @@ data:
   premarket_window_start: "04:00"
   premarket_window_end: "09:29"
 max_concurrent_requests: 8
+max_report_rows: 10
