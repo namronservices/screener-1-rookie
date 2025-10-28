@@ -156,6 +156,15 @@ class PolygonProvider(DataProvider):
             )
             raise RuntimeError(f"Polygon response from {path} was not valid JSON") from exc
 
+        logger.debug(
+            "Polygon API response received",
+            extra={
+                "url": url,
+                "status_code": response.status_code,
+                "response_summary": self._summarize_response(payload),
+            },
+        )
+
         if isinstance(payload, Mapping):
             status = payload.get("status")
             if isinstance(status, str) and status.upper() == "ERROR":
@@ -185,6 +194,24 @@ class PolygonProvider(DataProvider):
         if isinstance(results, Mapping):
             return [results]
         return [entry for entry in results if isinstance(entry, Mapping)]
+
+    @staticmethod
+    def _summarize_response(payload: Mapping[str, object] | Iterable[object]) -> Mapping[str, object]:
+        if isinstance(payload, Mapping):
+            keys = list(payload.keys())
+            preview = keys[:10]
+            summary: dict[str, object] = {
+                "type": "mapping",
+                "keys": preview,
+            }
+            if len(keys) > len(preview):
+                summary["truncated_keys"] = len(keys) - len(preview)
+            return summary
+        if isinstance(payload, list):
+            return {"type": "list", "length": len(payload)}
+        if isinstance(payload, tuple):
+            return {"type": "tuple", "length": len(payload)}
+        return {"type": type(payload).__name__}
 
     @staticmethod
     def _safe_float(value: object) -> float | None:

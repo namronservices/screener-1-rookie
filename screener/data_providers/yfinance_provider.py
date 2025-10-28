@@ -52,6 +52,16 @@ class YFinanceProvider(DataProvider):
             extra={"symbol": symbol, "period": "60d", "interval": "1d"},
         )
         hist = ticker.history(period="60d", interval="1d")
+        hist_columns = list(getattr(hist, "columns", []))
+        logger.debug(
+            "Received yfinance historical data",
+            extra={
+                "symbol": symbol,
+                "rows": int(getattr(hist, "shape", (0, 0))[0]),
+                "columns": hist_columns[:10],
+                "columns_truncated": max(len(hist_columns) - 10, 0),
+            },
+        )
         if hist.empty:
             logger.error("No historical data returned", extra={"symbol": symbol})
             raise RuntimeError(f"No historical data returned for {symbol}")
@@ -63,6 +73,16 @@ class YFinanceProvider(DataProvider):
             extra={"symbol": symbol, "period": "5d", "interval": "5m"},
         )
         intraday = ticker.history(period="5d", interval="5m")
+        intraday_columns = list(getattr(intraday, "columns", []))
+        logger.debug(
+            "Received yfinance intraday data",
+            extra={
+                "symbol": symbol,
+                "rows": int(getattr(intraday, "shape", (0, 0))[0]),
+                "columns": intraday_columns[:10],
+                "columns_truncated": max(len(intraday_columns) - 10, 0),
+            },
+        )
         intraday = intraday.tz_convert(self._config.timezone)
         if as_of.tzinfo is None:
             session_local = self._session_tz.localize(as_of)
@@ -101,6 +121,15 @@ class YFinanceProvider(DataProvider):
         # pulling it from the ticker info dictionary. This is cached by yfinance.
         logger.debug("Requesting yfinance ticker info", extra={"symbol": symbol})
         info = ticker.get_info()
+        info_keys = list(info.keys()) if isinstance(info, dict) else None
+        logger.debug(
+            "Received yfinance ticker info",
+            extra={
+                "symbol": symbol,
+                "keys": info_keys[:10] if info_keys is not None else None,
+                "keys_truncated": max(len(info_keys) - 10, 0) if info_keys is not None and len(info_keys) > 10 else 0,
+            },
+        )
         float_shares = int(info.get("floatShares") or info.get("sharesOutstanding") or 0)
 
         return build_snapshot(
