@@ -6,6 +6,7 @@ https://polygon.io/docs/rest/stocks/overview
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 from functools import cached_property
 from typing import Iterable, Mapping, Sequence
@@ -16,6 +17,9 @@ from ..analyzers import HistoricalBar, build_snapshot
 from ..config import DataAcquisition
 from ..models import PreMarketSnapshot
 from .base import DataProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 class PolygonProvider(DataProvider):
@@ -33,6 +37,7 @@ class PolygonProvider(DataProvider):
                 "provider_options['api_key_env'], or the POLYGON_API_KEY environment variable."
             )
 
+        logger.info("Initialising Polygon provider")
         self._session = requests.Session()
         # Default API key parameter applied to all requests.
         self._session.params = {"apiKey": self._api_key}
@@ -71,11 +76,16 @@ class PolygonProvider(DataProvider):
     # Public entry point
     # ------------------------------------------------------------------
     def fetch_snapshot(self, symbol: str, as_of: datetime) -> PreMarketSnapshot:
+        logger.info(
+            "Fetching Polygon snapshot",
+            extra={"symbol": symbol, "as_of": as_of.isoformat()},
+        )
         previous_close = self._fetch_previous_close(symbol, as_of)
         daily_volumes = self._fetch_thirty_day_volumes(symbol, as_of)
 
         intraday_bars = self._fetch_premarket_bars(symbol, as_of)
         if not intraday_bars:
+            logger.error("No premarket bars returned", extra={"symbol": symbol})
             raise RuntimeError(f"No premarket data returned for {symbol}")
 
         premarket_volume = sum(bar.volume for bar in intraday_bars)
@@ -103,6 +113,10 @@ class PolygonProvider(DataProvider):
         if params:
             merged_params.update({k: self._stringify_param(v) for k, v in params.items() if v is not None})
 
+        logger.debug(
+            "Calling Polygon API",
+            extra={"url": url, "params": merged_params},
+        )
         try:
             response = self._session.get(url, params=merged_params, timeout=self._DEFAULT_TIMEOUT)
             response.raise_for_status()
@@ -130,17 +144,26 @@ class PolygonProvider(DataProvider):
                 f"error={exc}",
             ]
             detail = ", ".join(p for p in detail_parts if p)
+            logger.exception("Polygon request failed", extra={"detail": detail})
             raise RuntimeError(f"Polygon request failed: {detail}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
+            logger.exception(
+                "Failed to decode Polygon response as JSON",
+                extra={"url": url},
+            )
             raise RuntimeError(f"Polygon response from {path} was not valid JSON") from exc
 
         if isinstance(payload, Mapping):
             status = payload.get("status")
             if isinstance(status, str) and status.upper() == "ERROR":
                 detail = payload.get("error") or payload.get("message") or "Unknown error"
+                logger.error(
+                    "Polygon API reported error",
+                    extra={"url": url, "detail": detail},
+                )
                 raise RuntimeError(f"Polygon error for {path}: {detail}")
         return payload
 
@@ -202,6 +225,7 @@ class PolygonProvider(DataProvider):
             if close is not None:
                 return close
 
+        logger.error("No previous close data returned", extra={"symbol": symbol})
         raise RuntimeError(f"No previous close data returned for {symbol}")
 
     def _iter_recent_daily_aggs(self, symbol: str, as_of: date, days: int) -> Iterable[Mapping[str, object]]:
@@ -236,6 +260,7 @@ class PolygonProvider(DataProvider):
         )
         results = self._coerce_results(payload)
         if not results:
+            logger.error("No historical daily data returned", extra={"symbol": symbol})
             raise RuntimeError(f"No historical daily data returned for {symbol}")
 
         volumes: list[int] = []
@@ -319,6 +344,7 @@ class PolygonProvider(DataProvider):
             value = self._safe_int(result.get(key))
             if value:
                 return value
+        logger.warning("Float shares not reported", extra={"symbol": symbol})
         return 0
 
     # ------------------------------------------------------------------
