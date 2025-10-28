@@ -23,7 +23,7 @@ def _configure_logging() -> None:
     """Initialise an application wide logger configuration."""
 
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
 
