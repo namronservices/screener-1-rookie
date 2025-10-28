@@ -1,6 +1,7 @@
 """Core orchestration logic for the screener."""
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import List, Protocol
@@ -9,6 +10,9 @@ from .config import DataAcquisition, ScreenerConfig
 from .filters import apply_filters, build_filters
 from .models import ScreenerResult
 from .data_providers.base import DataProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderFactory(Protocol):
@@ -27,10 +31,17 @@ class ScreenerEngine:
         """Execute the screening workflow for the configured universe."""
 
         as_of = as_of or datetime.now(tz=timezone.utc)
+        logger.info("Running screener engine", extra={"as_of": as_of.isoformat()})
+
         provider = self._provider_factory(self._config.data)
+        logger.debug("Warming provider cache", extra={"symbols": list(self._config.universe.symbols)})
         provider.warm_cache(self._config.universe.symbols, as_of)
 
         filters = tuple(build_filters(self._config.criteria))
+        logger.debug(
+            "Constructed filters",
+            extra={"filter_count": len(filters)},
+        )
         results: List[ScreenerResult] = []
 
         with ThreadPoolExecutor(max_workers=self._config.max_concurrent_requests) as pool:
@@ -41,13 +52,16 @@ class ScreenerEngine:
             for future in as_completed(future_map):
                 symbol = future_map[future]
                 try:
+                    logger.debug("Awaiting snapshot", extra={"symbol": symbol})
                     snapshot = future.result()
                 except Exception as exc:
+                    logger.exception(
+                        "Failed to fetch snapshot",
+                        extra={"symbol": symbol},
+                    )
                     # Instead of failing the entire screen we capture the failure in a
                     # synthetic result. Downstream systems can inspect the exception
-                    # attribute to decide how to handle it. Logging is intentionally
-                    # kept outside of this engine to allow the caller to plug any
-                    # structured logging of their choice.
+                    # attribute to decide how to handle it.
                     result = ScreenerResult(
                         symbol=symbol,
                         snapshot=None,
@@ -56,7 +70,12 @@ class ScreenerEngine:
                     )
                     results.append(result)
                     continue
-                results.append(apply_filters(snapshot, filters))
+                result = apply_filters(snapshot, filters)
+                results.append(result)
+                logger.info(
+                    "Completed snapshot",
+                    extra={"symbol": symbol, "actionable": result.is_actionable()},
+                )
         return sorted(
             results,
             key=lambda r: (

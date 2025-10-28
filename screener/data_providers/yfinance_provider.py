@@ -1,6 +1,7 @@
 """Implementation of :class:`DataProvider` using the `yfinance` package."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from functools import cached_property
 from typing import Sequence
@@ -9,6 +10,8 @@ from ..analyzers import HistoricalBar, build_snapshot
 from ..config import DataAcquisition
 from ..models import PreMarketSnapshot
 from .base import DataProvider
+
+logger = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency
     import yfinance as yf
@@ -39,14 +42,47 @@ class YFinanceProvider(DataProvider):
         return None
 
     def fetch_snapshot(self, symbol: str, as_of: datetime) -> PreMarketSnapshot:
+        logger.info(
+            "Fetching yfinance snapshot",
+            extra={"symbol": symbol, "as_of": as_of.isoformat()},
+        )
         ticker = yf.Ticker(symbol)
+        logger.debug(
+            "Requesting yfinance historical data",
+            extra={"symbol": symbol, "period": "60d", "interval": "1d"},
+        )
         hist = ticker.history(period="60d", interval="1d")
+        hist_columns = list(getattr(hist, "columns", []))
+        logger.debug(
+            "Received yfinance historical data",
+            extra={
+                "symbol": symbol,
+                "rows": int(getattr(hist, "shape", (0, 0))[0]),
+                "columns": hist_columns[:10],
+                "columns_truncated": max(len(hist_columns) - 10, 0),
+            },
+        )
         if hist.empty:
+            logger.error("No historical data returned", extra={"symbol": symbol})
             raise RuntimeError(f"No historical data returned for {symbol}")
         previous_close = float(hist["Close"].iloc[-1])
         average_volume_samples = hist["Volume"].tail(30).astype(int).tolist()
 
+        logger.debug(
+            "Requesting yfinance intraday data",
+            extra={"symbol": symbol, "period": "5d", "interval": "5m"},
+        )
         intraday = ticker.history(period="5d", interval="5m")
+        intraday_columns = list(getattr(intraday, "columns", []))
+        logger.debug(
+            "Received yfinance intraday data",
+            extra={
+                "symbol": symbol,
+                "rows": int(getattr(intraday, "shape", (0, 0))[0]),
+                "columns": intraday_columns[:10],
+                "columns_truncated": max(len(intraday_columns) - 10, 0),
+            },
+        )
         intraday = intraday.tz_convert(self._config.timezone)
         if as_of.tzinfo is None:
             session_local = self._session_tz.localize(as_of)
@@ -63,6 +99,7 @@ class YFinanceProvider(DataProvider):
             effective_premarket_end = session_local
         premarket_data = intraday.loc[premarket_start:effective_premarket_end]
         if premarket_data.empty:
+            logger.error("No premarket data returned", extra={"symbol": symbol})
             raise RuntimeError(f"No premarket data returned for {symbol}")
         last_row = premarket_data.iloc[-1]
         last_price = float(last_row["Close"])
@@ -82,7 +119,17 @@ class YFinanceProvider(DataProvider):
 
         # yfinance currently doesn't expose float shares reliably, so we fall back to
         # pulling it from the ticker info dictionary. This is cached by yfinance.
+        logger.debug("Requesting yfinance ticker info", extra={"symbol": symbol})
         info = ticker.get_info()
+        info_keys = list(info.keys()) if isinstance(info, dict) else None
+        logger.debug(
+            "Received yfinance ticker info",
+            extra={
+                "symbol": symbol,
+                "keys": info_keys[:10] if info_keys is not None else None,
+                "keys_truncated": max(len(info_keys) - 10, 0) if info_keys is not None and len(info_keys) > 10 else 0,
+            },
+        )
         float_shares = int(info.get("floatShares") or info.get("sharesOutstanding") or 0)
 
         return build_snapshot(

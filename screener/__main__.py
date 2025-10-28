@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -16,6 +17,15 @@ from .config import ScreenerConfig
 from .engine import ScreenerEngine
 from .factories import resolve_provider_factory
 from .reporting import render_table, summarize
+
+
+def _configure_logging() -> None:
+    """Initialise an application wide logger configuration."""
+
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
 
 
 def load_config(path: Path) -> ScreenerConfig:
@@ -43,12 +53,20 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
+    _configure_logging()
+
+    logger = logging.getLogger(__name__)
     args = parse_args(argv)
+    logger.info("Loading configuration", extra={"config_path": str(args.config)})
     config = load_config(args.config)
     factory = resolve_provider_factory(config.data.provider)
     engine = ScreenerEngine(config, factory)
 
     as_of = datetime.fromisoformat(args.as_of) if args.as_of else None
+    logger.info(
+        "Starting screener run",
+        extra={"as_of": as_of.isoformat() if as_of else None},
+    )
     results = engine.run(as_of=as_of)
     rows = [summarize(result) for result in results]
     print(render_table(rows))
