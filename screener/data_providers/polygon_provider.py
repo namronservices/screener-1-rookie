@@ -157,7 +157,8 @@ class PolygonProvider(DataProvider):
             raise RuntimeError(f"Polygon response from {path} was not valid JSON") from exc
 
         logger.debug(
-            "Polygon API response received",
+            "Polygon API response received: %s",
+            payload,
             extra={
                 "url": url,
                 "status_code": response.status_code,
