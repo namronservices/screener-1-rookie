@@ -68,13 +68,19 @@ screener/
 
 Set the `data.provider` field in the configuration to `"polygon"` and supply an
 API key through `data.provider_options`. Keys can be embedded directly in the
-config or referenced via an environment variable.
+config or referenced via an environment variable. Symbol discovery defaults to
+Yahoo Finance, but you can override it explicitly with the
+`data.discovery_provider` (and matching `data.discovery_provider_options`)
+fields when required.
 
 ```yaml
 data:
   provider: polygon
+  discovery_provider: yfinance  # default; used only for ticker discovery
   provider_options:
     api_key_env: POLYGON_API_KEY  # or set api_key: "<token>"
+  # discovery_provider_options:
+  #   some_option: value
 ```
 
 Ensure the referenced environment variable is exported before running the

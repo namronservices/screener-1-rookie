@@ -76,11 +76,13 @@ class DataAcquisition:
     """Instructions for sourcing pre-market and historical data."""
 
     provider: str = "yfinance"
+    discovery_provider: str = "yfinance"
     cache_path: Path | None = None
     premarket_window_start: time = time(hour=4, minute=0)
     premarket_window_end: time = time(hour=9, minute=29)
     timezone: str = "US/Eastern"
     provider_options: Mapping[str, object] = field(default_factory=dict)
+    discovery_provider_options: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -179,9 +181,15 @@ class ScreenerConfig:
         provider_options_map = ensure_mapping(
             data_map.get("provider_options"), "data.provider_options"
         )
+        discovery_provider_options_map = ensure_mapping(
+            data_map.get("discovery_provider_options"), "data.discovery_provider_options"
+        )
 
         data_config = DataAcquisition(
             provider=str(data_map.get("provider", data_defaults.provider)),
+            discovery_provider=str(
+                data_map.get("discovery_provider", data_defaults.discovery_provider)
+            ),
             cache_path=cache_path,
             premarket_window_start=parse_time(
                 data_map.get("premarket_window_start"), data_defaults.premarket_window_start
@@ -191,6 +199,7 @@ class ScreenerConfig:
             ),
             timezone=str(data_map.get("timezone", data_defaults.timezone)),
             provider_options=dict(provider_options_map),
+            discovery_provider_options=dict(discovery_provider_options_map),
         )
 
         config = cls(

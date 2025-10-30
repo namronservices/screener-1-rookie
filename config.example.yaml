@@ -11,9 +11,10 @@ criteria:
     require_above_vwap: true
   minimum_float_shares: 12000000
 data:
-  provider: yfinance
-  # provider_options:
-  #   api_key_env: POLYGON_API_KEY  # required when provider: polygon
+  provider: polygon
+  discovery_provider: yfinance
+  provider_options:
+    api_key_env: POLYGON_API_KEY  # required when provider: polygon
   timezone: US/Eastern
   premarket_window_start: "04:00"
   premarket_window_end: "09:29"

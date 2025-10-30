@@ -59,8 +59,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
     logger.info("Loading configuration", extra={"config_path": str(args.config)})
     config = load_config(args.config)
-    factory = resolve_provider_factory(config.data.provider)
-    engine = ScreenerEngine(config, factory)
+    data_factory = resolve_provider_factory(config.data.provider)
+    discovery_factory = resolve_provider_factory(config.data.discovery_provider)
+    engine = ScreenerEngine(config, data_factory, discovery_factory)
 
     as_of = datetime.fromisoformat(args.as_of) if args.as_of else None
     logger.info(
