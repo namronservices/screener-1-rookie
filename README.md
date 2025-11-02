@@ -16,8 +16,9 @@ intra-day trading strategies.
   Finance (`yfinance`), and an optional Polygon.io provider is available for
   desks with licensed market data. Additional providers can be registered
   without touching the core engine.
-- **Concurrency-aware execution** – Symbols are processed in parallel to keep
-  run times low when scanning large universes.
+- **Static ticker universe** – A packaged CSV catalog is filtered by
+  configurable market-cap bounds before evaluation, ensuring consistent inputs
+  across runs while avoiding reliance on hand-curated lists.
 - **Human-friendly reporting** – Results are rendered as a clean table that
   highlights failing criteria for each symbol.
 
@@ -51,7 +52,8 @@ screener/
 
    Use [`config.example.yaml`](config.example.yaml) as a starting point. The
    config controls the ticker universe, filter thresholds, and data provider
-   settings.
+   settings. The universe is derived from `screener/tickers/tickers.csv` and is
+   trimmed to the configured market-cap band before any checks are executed.
 
 3. **Run the screener**
 

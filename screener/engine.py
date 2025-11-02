@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import List, Protocol
 
@@ -44,42 +43,45 @@ class ScreenerEngine:
         )
         results: List[ScreenerResult] = []
 
-        with ThreadPoolExecutor(max_workers=self._config.max_concurrent_requests) as pool:
-            future_map = {
-                pool.submit(provider.fetch_snapshot, symbol, as_of): symbol
-                for symbol in self._config.universe.symbols
-            }
-            for future in as_completed(future_map):
-                symbol = future_map[future]
-                try:
-                    logger.debug("Awaiting snapshot", extra={"symbol": symbol})
-                    snapshot = future.result()
-                except Exception as exc:
-                    logger.exception(
-                        "Failed to fetch snapshot",
-                        extra={"symbol": symbol},
-                    )
-                    # Instead of failing the entire screen we capture the failure in a
-                    # synthetic result. Downstream systems can inspect the exception
-                    # attribute to decide how to handle it.
-                    result = ScreenerResult(
-                        symbol=symbol,
-                        snapshot=None,
-                        passed_filters={},
-                        error=exc,
-                    )
-                    results.append(result)
-                    continue
-                result = apply_filters(snapshot, filters)
-                results.append(result)
-                logger.info(
-                    "Completed snapshot",
-                    extra={"symbol": symbol, "actionable": result.is_actionable()},
+        for symbol in self._config.universe.symbols:
+            try:
+                logger.debug("Fetching snapshot", extra={"symbol": symbol})
+                snapshot = provider.fetch_snapshot(symbol, as_of)
+            except Exception as exc:
+                logger.exception(
+                    "Failed to fetch snapshot",
+                    extra={"symbol": symbol},
                 )
-        return sorted(
-            results,
-            key=lambda r: (
-                not r.is_actionable(),
-                -(r.snapshot.gap_percent if r.snapshot else 0.0),
-            ),
-        )
+                result = ScreenerResult(
+                    symbol=symbol,
+                    snapshot=None,
+                    passed_filters={},
+                    error=exc,
+                )
+                results.append(result)
+                continue
+
+            result = apply_filters(snapshot, filters)
+            results.append(result)
+            logger.info(
+                "Completed snapshot",
+                extra={"symbol": symbol, "actionable": result.is_actionable()},
+            )
+
+        def sort_key(result: ScreenerResult) -> tuple[object, ...]:
+            passed_count = sum(1 for passed in result.passed_filters.values() if passed)
+            gap = abs(result.snapshot.gap_percent) if result.snapshot else 0.0
+            volume = result.snapshot.premarket_volume if result.snapshot else 0
+            return (
+                not result.is_actionable(),
+                -passed_count,
+                -gap,
+                -volume,
+                result.symbol,
+            )
+
+        sorted_results = sorted(results, key=sort_key)
+        max_results = self._config.universe.max_results
+        if max_results is not None:
+            sorted_results = sorted_results[:max_results]
+        return sorted_results
