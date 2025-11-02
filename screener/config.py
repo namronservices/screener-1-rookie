@@ -13,6 +13,8 @@ from datetime import datetime, time
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from .tickers import DEFAULT_TICKER_CSV, select_symbols
+
 
 @dataclass(frozen=True)
 class SymbolUniverse:
@@ -31,14 +33,33 @@ class SymbolUniverse:
 
     symbols: Sequence[str]
     include_etfs: bool = False
+    market_cap_from: int | None = None
+    market_cap_to: int | None = None
+    max_results: int | None = None
+    catalog_path: Path | None = None
 
     def __post_init__(self) -> None:
-        cleaned = tuple(sym.strip().upper() for sym in self.symbols)
+        cleaned = tuple(dict.fromkeys(sym.strip().upper() for sym in self.symbols))
         if len(cleaned) == 0:
             raise ValueError("At least one symbol must be provided")
         if any(not sym for sym in cleaned):
             raise ValueError("Empty symbol detected after stripping whitespace")
         object.__setattr__(self, "symbols", cleaned)
+        if self.market_cap_from is not None and self.market_cap_from < 0:
+            raise ValueError("market_cap_from must be non-negative")
+        if self.market_cap_to is not None and self.market_cap_to < 0:
+            raise ValueError("market_cap_to must be non-negative")
+        if (
+            self.market_cap_from is not None
+            and self.market_cap_to is not None
+            and self.market_cap_from > self.market_cap_to
+        ):
+            raise ValueError("market_cap_from cannot exceed market_cap_to")
+        if self.max_results is not None and self.max_results <= 0:
+            raise ValueError("max_results must be positive when provided")
+        catalog_path = self.catalog_path
+        if catalog_path is not None and not isinstance(catalog_path, Path):
+            object.__setattr__(self, "catalog_path", Path(catalog_path))
 
 
 @dataclass(frozen=True)
@@ -143,19 +164,72 @@ class ScreenerConfig:
                 f"Time values must be provided as HH:MM strings, got {type(value)!r}"
             )
 
+        def parse_optional_int(value: object, label: str) -> int | None:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                candidate = int(value)
+            else:
+                text = str(value).strip()
+                if not text:
+                    return None
+                try:
+                    candidate = int(float(text))
+                except ValueError as exc:
+                    raise ValueError(f"{label} must be numeric, got {value!r}") from exc
+            if candidate < 0:
+                raise ValueError(f"{label} must be non-negative")
+            return candidate
+
         universe_map = ensure_mapping(data.get("universe"), "universe")
         criteria_map = ensure_mapping(data.get("criteria"), "criteria")
         data_map = ensure_mapping(data.get("data"), "data")
 
-        raw_symbols = universe_map.get("symbols", ())
-        if isinstance(raw_symbols, str):
-            raw_symbols = [raw_symbols]
-        if not isinstance(raw_symbols, Iterable):
-            raise TypeError("universe.symbols must be an iterable of strings")
-        symbols = tuple(str(sym) for sym in raw_symbols)
+        market_cap_from = parse_optional_int(
+            universe_map.get("market_cap_from"), "universe.market_cap_from"
+        )
+        market_cap_to = parse_optional_int(
+            universe_map.get("market_cap_to"), "universe.market_cap_to"
+        )
+        max_results = parse_optional_int(
+            universe_map.get("max_results"), "universe.max_results"
+        )
+        if max_results is not None and max_results == 0:
+            raise ValueError("universe.max_results must be positive when provided")
+
+        tickers_source = universe_map.get("tickers_file")
+        if tickers_source is None or tickers_source == "":
+            catalog_path = DEFAULT_TICKER_CSV
+        else:
+            catalog_path = Path(str(tickers_source)).expanduser()
+
+        raw_symbols = universe_map.get("symbols")
+        if raw_symbols is not None:
+            if isinstance(raw_symbols, str):
+                raw_symbols = [raw_symbols]
+            if not isinstance(raw_symbols, Iterable):
+                raise TypeError("universe.symbols must be an iterable of strings")
+            symbols = tuple(str(sym) for sym in raw_symbols)
+        else:
+            if market_cap_from is None or market_cap_to is None:
+                raise ValueError(
+                    "universe.market_cap_from and universe.market_cap_to must be provided when universe.symbols is omitted"
+                )
+            symbols = tuple(
+                select_symbols(
+                    path=catalog_path,
+                    market_cap_from=market_cap_from,
+                    market_cap_to=market_cap_to,
+                )
+            )
+
         universe = SymbolUniverse(
             symbols=symbols,
             include_etfs=bool(universe_map.get("include_etfs", False)),
+            market_cap_from=market_cap_from,
+            market_cap_to=market_cap_to,
+            max_results=max_results,
+            catalog_path=catalog_path,
         )
 
         volume_defaults = VolumeThresholds()

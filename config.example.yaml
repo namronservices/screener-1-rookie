@@ -1,9 +1,12 @@
 # Example configuration for the pre-market screener.
 universe:
-  symbols:
-    - AAPL
-    - AMD
-    - TSLA
+  # Market capitalisation bounds expressed in USD. The packaged universe in
+  # screener/tickers/tickers.csv is filtered using these limits before any
+  # data-provider requests are made.
+  market_cap_from: 300000000
+  market_cap_to: 5000000000
+  # Limit the number of tickers evaluated and shown in the final report.
+  max_results: 15
 criteria:
   volume:
     relative_to_30day_avg: 2.0
