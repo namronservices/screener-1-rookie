@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 config.yaml
 screener/.DS_Store
+config_old.yaml
