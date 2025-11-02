@@ -66,27 +66,44 @@ def select_symbols(
 ) -> Sequence[str]:
     """Load ticker symbols filtered by market-cap bounds and optional limit."""
 
-    filtered: list[str] = []
+    selected: list[str] = []
+    outside_bounds: list[str] = []
+
     for record in iter_catalog(path):
-        if record.market_cap is None:
-            continue
-        if market_cap_from is not None and record.market_cap < market_cap_from:
-            continue
-        if market_cap_to is not None and record.market_cap > market_cap_to:
-            continue
-        filtered.append(record.symbol)
-        if limit is not None and len(filtered) >= limit:
-            break
+        market_cap = record.market_cap
+        within_bounds = True
+        if market_cap is None:
+            within_bounds = False
+        if within_bounds and market_cap_from is not None and market_cap < market_cap_from:
+            within_bounds = False
+        if within_bounds and market_cap_to is not None and market_cap > market_cap_to:
+            within_bounds = False
+
+        if within_bounds:
+            selected.append(record.symbol)
+            if limit is not None and len(selected) >= limit:
+                break
+        else:
+            outside_bounds.append(record.symbol)
+
+    if limit is None:
+        ordered = selected
+    else:
+        ordered = selected + outside_bounds
+        ordered = ordered[:limit]
+
     logger.debug(
         "Selected symbols from catalog",
         extra={
             "market_cap_from": market_cap_from,
             "market_cap_to": market_cap_to,
             "limit": limit,
-            "selected": len(filtered),
+            "selected": len(ordered),
+            "within_bounds": len(selected),
+            "outside_bounds_considered": len(outside_bounds),
         },
     )
-    return tuple(filtered)
+    return tuple(ordered)
 
 
 __all__ = ["DEFAULT_TICKER_CSV", "TickerRecord", "iter_catalog", "select_symbols"]

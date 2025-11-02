@@ -16,7 +16,7 @@ except Exception:  # pragma: no cover - safe fallback
 from .config import ScreenerConfig
 from .engine import ScreenerEngine
 from .factories import resolve_provider_factory
-from .reporting import render_table, summarize
+from .reporting import render_table, summarize, write_csv_report
 
 
 def _configure_logging() -> None:
@@ -68,8 +68,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         extra={"as_of": as_of.isoformat() if as_of else None},
     )
     results = engine.run(as_of=as_of)
-    rows = [summarize(result) for result in results]
+
+    max_results = config.universe.max_results
+    display_results = results if max_results is None else results[:max_results]
+    rows = [summarize(result) for result in display_results]
     print(render_table(rows))
+
+    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    output_filename = f"screener-results-{timestamp}.csv"
+    output_path = Path.cwd() / output_filename
+    write_csv_report(results, output_path)
+    logger.info("Wrote CSV report", extra={"path": str(output_path)})
+
     has_actionable = any(result.is_actionable() for result in results)
     return 0 if has_actionable else 1
 

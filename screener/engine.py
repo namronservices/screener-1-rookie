@@ -81,7 +81,4 @@ class ScreenerEngine:
             )
 
         sorted_results = sorted(results, key=sort_key)
-        max_results = self._config.universe.max_results
-        if max_results is not None:
-            sorted_results = sorted_results[:max_results]
         return sorted_results

@@ -8,12 +8,16 @@ changes.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, time
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-from .tickers import DEFAULT_TICKER_CSV, select_symbols
+from .tickers import DEFAULT_TICKER_CSV, iter_catalog, select_symbols
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -222,6 +226,27 @@ class ScreenerConfig:
                     market_cap_to=market_cap_to,
                 )
             )
+
+            max_catalog_check = max_results if max_results is not None else 50
+            if max_catalog_check > 0:
+                catalog_symbols: list[str] = []
+                more_symbols_available = False
+                for record in iter_catalog(catalog_path):
+                    catalog_symbols.append(record.symbol)
+                    if len(catalog_symbols) > max_catalog_check:
+                        more_symbols_available = True
+                        break
+
+                if not more_symbols_available and len(symbols) < len(catalog_symbols):
+                    logger.debug(
+                        "Insufficient tickers after market-cap filtering; falling back to raw catalog order",
+                        extra={
+                            "catalog_path": str(catalog_path),
+                            "filtered_count": len(symbols),
+                            "catalog_count": len(catalog_symbols),
+                        },
+                    )
+                    symbols = tuple(catalog_symbols)
 
         universe = SymbolUniverse(
             symbols=symbols,
