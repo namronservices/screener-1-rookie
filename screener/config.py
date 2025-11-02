@@ -227,7 +227,7 @@ class ScreenerConfig:
                 )
             )
 
-            max_catalog_check = max_results if max_results is not None else 50
+            max_catalog_check = max(50, max_results or 0)
             if max_catalog_check > 0:
                 catalog_symbols: list[str] = []
                 more_symbols_available = False
