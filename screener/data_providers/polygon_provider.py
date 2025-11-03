@@ -82,12 +82,20 @@ class PolygonProvider(DataProvider):
         )
         previous_close = self._fetch_previous_close(symbol, as_of)
         daily_aggregates = self._fetch_recent_daily_aggregates(symbol, as_of)
+        as_of_date = self._as_date(as_of)
+        historical_sessions: list[Mapping[str, object]] = []
+        for entry in daily_aggregates:
+            session_date = self._extract_aggregate_date(entry)
+            if session_date is None or session_date >= as_of_date:
+                continue
+            historical_sessions.append(entry)
+
         daily_volumes = [
             self._safe_int(entry.get("volume") or entry.get("v")) or 0
-            for entry in daily_aggregates[-30:]
+            for entry in historical_sessions[-30:]
         ]
         daily_closes: list[float] = []
-        for entry in daily_aggregates:
+        for entry in historical_sessions:
             close = self._safe_float(entry.get("close") or entry.get("c"))
             if close is not None:
                 daily_closes.append(close)
