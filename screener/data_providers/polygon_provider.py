@@ -95,10 +95,14 @@ class PolygonProvider(DataProvider):
             for entry in historical_sessions[-30:]
         ]
         daily_closes: list[float] = []
+        daily_opens: list[float] = []
         for entry in historical_sessions:
             close = self._safe_float(entry.get("close") or entry.get("c"))
             if close is not None:
                 daily_closes.append(close)
+            open_ = self._safe_float(entry.get("open") or entry.get("o"))
+            if open_ is not None:
+                daily_opens.append(open_)
 
         intraday_bars = self._fetch_premarket_bars(symbol, as_of)
         if not intraday_bars:
@@ -120,6 +124,7 @@ class PolygonProvider(DataProvider):
             float_shares=float_shares,
             intraday_bars=intraday_bars,
             daily_closes=daily_closes,
+            sma_prices=daily_opens,
         )
 
     # ------------------------------------------------------------------

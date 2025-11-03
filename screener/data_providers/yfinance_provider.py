@@ -85,6 +85,7 @@ class YFinanceProvider(DataProvider):
         previous_close = float(hist_regular["Close"].iloc[-1])
         average_volume_samples = hist_regular["Volume"].tail(30).astype(int).tolist()
         daily_closes = hist_regular["Close"].astype(float).tolist()
+        daily_opens = hist_regular["Open"].astype(float).tolist()
 
         logger.debug(
             "Requesting yfinance intraday data",
@@ -156,4 +157,5 @@ class YFinanceProvider(DataProvider):
             float_shares=float_shares,
             intraday_bars=bars,
             daily_closes=daily_closes,
+            sma_prices=daily_opens,
         )
