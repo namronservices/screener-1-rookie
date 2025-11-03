@@ -67,6 +67,7 @@ class YFinanceProvider(DataProvider):
             raise RuntimeError(f"No historical data returned for {symbol}")
         previous_close = float(hist["Close"].iloc[-1])
         average_volume_samples = hist["Volume"].tail(30).astype(int).tolist()
+        daily_closes = hist["Close"].astype(float).tolist()
 
         logger.debug(
             "Requesting yfinance intraday data",
@@ -141,4 +142,5 @@ class YFinanceProvider(DataProvider):
             thirty_day_volume_samples=average_volume_samples,
             float_shares=float_shares,
             intraday_bars=bars,
+            daily_closes=daily_closes,
         )

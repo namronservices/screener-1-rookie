@@ -93,18 +93,56 @@ class GapThresholds:
 
 
 @dataclass(frozen=True)
+class TrendCriteria:
+    """Thresholds for classifying price action relative to the 20-day SMA."""
+
+    moderate_threshold_percent: float = 1.0
+    strong_threshold_percent: float = 3.0
+    preferred_categories: Sequence[str] = ("bullish", "bearish")
+
+    _ALLOWED_CATEGORIES = {
+        "bullish",
+        "moderate bullish",
+        "sideways",
+        "moderate bearish",
+        "bearish",
+    }
+
+    def validate(self) -> None:
+        if not tuple(self.preferred_categories):
+            raise ValueError("At least one preferred trend category must be specified")
+        if self.moderate_threshold_percent < 0:
+            raise ValueError("Trend moderate threshold must be non-negative")
+        if self.strong_threshold_percent < 0:
+            raise ValueError("Trend strong threshold must be non-negative")
+        if self.strong_threshold_percent < self.moderate_threshold_percent:
+            raise ValueError("Trend strong threshold cannot be below the moderate threshold")
+        invalid = [
+            category
+            for category in self.preferred_categories
+            if category.lower() not in self._ALLOWED_CATEGORIES
+        ]
+        if invalid:
+            raise ValueError(
+                "Unknown trend categories specified: " + ", ".join(sorted(set(invalid)))
+            )
+
+
+@dataclass(frozen=True)
 class ScreenerCriteria:
     """Grouping of all filter thresholds applied by the screener."""
 
     volume: VolumeThresholds = field(default_factory=VolumeThresholds)
     gap: GapThresholds = field(default_factory=GapThresholds)
     minimum_float_shares: int = 10_000_000
+    trend: TrendCriteria = field(default_factory=TrendCriteria)
 
     def validate(self) -> None:
         self.volume.validate()
         self.gap.validate()
         if self.minimum_float_shares <= 0:
             raise ValueError("Float threshold must be positive")
+        self.trend.validate()
 
 
 @dataclass(frozen=True)
@@ -279,12 +317,44 @@ class ScreenerConfig:
             ),
         )
 
+        trend_defaults = TrendCriteria()
+        trend_map = ensure_mapping(criteria_map.get("trend"), "criteria.trend")
+        preferred_categories_value = trend_map.get(
+            "preferred_categories", trend_defaults.preferred_categories
+        )
+        if preferred_categories_value is None:
+            preferred_iterable = trend_defaults.preferred_categories
+        elif isinstance(preferred_categories_value, str):
+            preferred_iterable = (preferred_categories_value,)
+        elif isinstance(preferred_categories_value, Iterable):
+            preferred_iterable = tuple(str(cat) for cat in preferred_categories_value)
+        else:
+            raise TypeError(
+                "criteria.trend.preferred_categories must be a string or iterable of strings"
+            )
+
+        trend = TrendCriteria(
+            moderate_threshold_percent=float(
+                trend_map.get(
+                    "moderate_threshold_percent",
+                    trend_defaults.moderate_threshold_percent,
+                )
+            ),
+            strong_threshold_percent=float(
+                trend_map.get(
+                    "strong_threshold_percent", trend_defaults.strong_threshold_percent
+                )
+            ),
+            preferred_categories=tuple(str(cat).strip().lower() for cat in preferred_iterable),
+        )
+
         criteria = ScreenerCriteria(
             volume=volume,
             gap=gap,
             minimum_float_shares=int(
                 criteria_map.get("minimum_float_shares", ScreenerCriteria().minimum_float_shares)
             ),
+            trend=trend,
         )
 
         data_defaults = DataAcquisition()
