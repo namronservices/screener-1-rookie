@@ -16,6 +16,9 @@ class ReportRow:
     premarket_volume: int | None
     relative_volume: float | None
     float_shares: int | None
+    sma_20: float | None
+    sma_20_percent_diff: float | None
+    trend_category: str | None
     notes: str
 
 
@@ -27,18 +30,31 @@ def summarize(result: ScreenerResult) -> ReportRow:
             premarket_volume=None,
             relative_volume=None,
             float_shares=None,
+            sma_20=None,
+            sma_20_percent_diff=None,
+            trend_category=None,
             notes=f"error: {result.error}",
         )
     assert result.snapshot is not None
     snapshot = result.snapshot
     failing = [name for name, passed in result.passed_filters.items() if not passed]
-    notes = "PASS" if not failing else "Fail: " + ", ".join(sorted(failing))
+    trend = snapshot.sma_20_category or "unknown"
+    trend_label = trend.title()
+    if not failing:
+        notes = f"PASS | Trend: {trend_label}"
+    else:
+        notes = f"Fail: {', '.join(sorted(failing))} | Trend: {trend_label}"
     return ReportRow(
         symbol=snapshot.symbol,
         gap_percent=round(snapshot.gap_percent, 2),
         premarket_volume=snapshot.premarket_volume,
         relative_volume=round(snapshot.relative_volume, 2),
         float_shares=snapshot.float_shares,
+        sma_20=snapshot.sma_20,
+        sma_20_percent_diff=None
+        if snapshot.sma_20_percent_diff is None
+        else round(snapshot.sma_20_percent_diff, 2),
+        trend_category=snapshot.sma_20_category,
         notes=notes,
     )
 
@@ -67,6 +83,9 @@ def _format_snapshot(snapshot: PreMarketSnapshot | None) -> Mapping[str, str]:
             "relative_volume": "",
             "float_shares": "",
             "vwap": "",
+            "sma_20": "",
+            "sma_20_percent_diff": "",
+            "sma_20_category": "",
         }
 
     return {
@@ -79,6 +98,9 @@ def _format_snapshot(snapshot: PreMarketSnapshot | None) -> Mapping[str, str]:
         "relative_volume": _format_number(snapshot.relative_volume),
         "float_shares": _format_int(snapshot.float_shares),
         "vwap": _format_number(snapshot.vwap),
+        "sma_20": _format_number(snapshot.sma_20),
+        "sma_20_percent_diff": _format_number(snapshot.sma_20_percent_diff),
+        "sma_20_category": "" if snapshot.sma_20_category is None else snapshot.sma_20_category,
     }
 
 
@@ -99,6 +121,9 @@ def write_csv_report(results: Sequence[ScreenerResult], destination: Path) -> No
         "relative_volume",
         "float_shares",
         "vwap",
+        "sma_20",
+        "sma_20_percent_diff",
+        "sma_20_category",
         "notes",
     ]
     filter_headers = [f"filter:{name}" for name in filter_names]
@@ -132,7 +157,16 @@ def write_csv_report(results: Sequence[ScreenerResult], destination: Path) -> No
 def render_table(rows: Sequence[ReportRow]) -> str:
     """Render a human-readable table suitable for console output or Slack."""
 
-    headers = ["Symbol", "Gap %", "Premkt Vol", "Rel Vol", "Float", "Notes"]
+    headers = [
+        "Symbol",
+        "Gap %",
+        "Premkt Vol",
+        "Rel Vol",
+        "Float",
+        "SMA20 %Δ",
+        "Trend",
+        "Notes",
+    ]
     column_widths = [len(h) for h in headers]
     formatted_rows = []
     for row in rows:
@@ -142,6 +176,10 @@ def render_table(rows: Sequence[ReportRow]) -> str:
             "" if row.premarket_volume is None else f"{row.premarket_volume:,}",
             "" if row.relative_volume is None else f"{row.relative_volume:.2f}",
             "" if row.float_shares is None else f"{row.float_shares:,}",
+            ""
+            if row.sma_20_percent_diff is None
+            else f"{row.sma_20_percent_diff:.2f}",
+            row.trend_category.title() if row.trend_category else "",
             row.notes,
         ]
         column_widths = [max(w, len(value)) for w, value in zip(column_widths, formatted)]

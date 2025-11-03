@@ -46,6 +46,12 @@ class YFinanceProvider(DataProvider):
             "Fetching yfinance snapshot",
             extra={"symbol": symbol, "as_of": as_of.isoformat()},
         )
+        if as_of.tzinfo is None:
+            session_local = self._session_tz.localize(as_of)
+        else:
+            session_local = as_of.astimezone(self._session_tz)
+        as_of_date = session_local.date()
+
         ticker = yf.Ticker(symbol)
         logger.debug(
             "Requesting yfinance historical data",
@@ -65,8 +71,21 @@ class YFinanceProvider(DataProvider):
         if hist.empty:
             logger.error("No historical data returned", extra={"symbol": symbol})
             raise RuntimeError(f"No historical data returned for {symbol}")
-        previous_close = float(hist["Close"].iloc[-1])
-        average_volume_samples = hist["Volume"].tail(30).astype(int).tolist()
+        index = hist.index
+        if index.tz is None:
+            index_local = index.tz_localize(self._session_tz)
+        else:
+            index_local = index.tz_convert(self._session_tz)
+        historical_mask = index_local.date < as_of_date
+        hist_regular = hist.loc[historical_mask]
+        if hist_regular.empty:
+            logger.error("No completed sessions available before as_of", extra={"symbol": symbol})
+            raise RuntimeError(f"No completed sessions available for {symbol}")
+
+        previous_close = float(hist_regular["Close"].iloc[-1])
+        average_volume_samples = hist_regular["Volume"].tail(30).astype(int).tolist()
+        daily_closes = hist_regular["Close"].astype(float).tolist()
+        daily_opens = hist_regular["Open"].astype(float).tolist()
 
         logger.debug(
             "Requesting yfinance intraday data",
@@ -84,10 +103,6 @@ class YFinanceProvider(DataProvider):
             },
         )
         intraday = intraday.tz_convert(self._config.timezone)
-        if as_of.tzinfo is None:
-            session_local = self._session_tz.localize(as_of)
-        else:
-            session_local = as_of.astimezone(self._session_tz)
         premarket_start = self._session_tz.localize(
             datetime.combine(session_local.date(), self._config.premarket_window_start)
         )
@@ -141,4 +156,6 @@ class YFinanceProvider(DataProvider):
             thirty_day_volume_samples=average_volume_samples,
             float_shares=float_shares,
             intraday_bars=bars,
+            daily_closes=daily_closes,
+            sma_prices=daily_opens,
         )

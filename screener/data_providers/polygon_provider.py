@@ -81,7 +81,28 @@ class PolygonProvider(DataProvider):
             extra={"symbol": symbol, "as_of": as_of.isoformat()},
         )
         previous_close = self._fetch_previous_close(symbol, as_of)
-        daily_volumes = self._fetch_thirty_day_volumes(symbol, as_of)
+        daily_aggregates = self._fetch_recent_daily_aggregates(symbol, as_of)
+        as_of_date = self._as_date(as_of)
+        historical_sessions: list[Mapping[str, object]] = []
+        for entry in daily_aggregates:
+            session_date = self._extract_aggregate_date(entry)
+            if session_date is None or session_date >= as_of_date:
+                continue
+            historical_sessions.append(entry)
+
+        daily_volumes = [
+            self._safe_int(entry.get("volume") or entry.get("v")) or 0
+            for entry in historical_sessions[-30:]
+        ]
+        daily_closes: list[float] = []
+        daily_opens: list[float] = []
+        for entry in historical_sessions:
+            close = self._safe_float(entry.get("close") or entry.get("c"))
+            if close is not None:
+                daily_closes.append(close)
+            open_ = self._safe_float(entry.get("open") or entry.get("o"))
+            if open_ is not None:
+                daily_opens.append(open_)
 
         intraday_bars = self._fetch_premarket_bars(symbol, as_of)
         if not intraday_bars:
@@ -102,6 +123,8 @@ class PolygonProvider(DataProvider):
             thirty_day_volume_samples=daily_volumes,
             float_shares=float_shares,
             intraday_bars=intraday_bars,
+            daily_closes=daily_closes,
+            sma_prices=daily_opens,
         )
 
     # ------------------------------------------------------------------
@@ -279,23 +302,20 @@ class PolygonProvider(DataProvider):
     # ------------------------------------------------------------------
     # Historical context
     # ------------------------------------------------------------------
-    def _fetch_thirty_day_volumes(self, symbol: str, as_of: datetime) -> list[int]:
+    def _fetch_recent_daily_aggregates(
+        self, symbol: str, as_of: datetime
+    ) -> list[Mapping[str, object]]:
         as_of_date = self._as_date(as_of)
         start_date = (as_of_date - timedelta(days=120)).isoformat()
         payload = self._request(
             f"/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{as_of_date.isoformat()}",
             {"adjusted": True, "sort": "asc", "limit": 180},
         )
-        results = self._coerce_results(payload)
+        results = list(self._coerce_results(payload))
         if not results:
             logger.error("No historical daily data returned", extra={"symbol": symbol})
             raise RuntimeError(f"No historical daily data returned for {symbol}")
-
-        volumes: list[int] = []
-        for entry in results[-30:]:
-            volume = self._safe_int(entry.get("volume") or entry.get("v"))
-            volumes.append(volume or 0)
-        return volumes
+        return results
 
     # ------------------------------------------------------------------
     # Intraday bars
