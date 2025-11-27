@@ -28,6 +28,7 @@ intra-day trading strategies.
 screener/
 ├── __main__.py              # CLI entry point
 ├── analyzers.py             # VWAP and snapshot builders
+├── scanner_definitions.py   # Scanner catalogue and baseline query definitions
 ├── config.py                # Dataclasses and serialization helpers
 ├── data_providers/          # Provider interfaces and implementations
 ├── engine.py                # Orchestrates fetching, filtering, sorting
@@ -58,13 +59,15 @@ screener/
 3. **Run the screener**
 
    ```bash
-   python -m screener --config path/to/config.yaml
+   python -m screener --config path/to/config.yaml [--scanner "Gainers"] [--list-scanners]
    ```
 
    The command prints a ranked table sorted by actionable tickers first. The
    process exits with status code `0` when at least one ticker passes all
    filters, or `1` otherwise. Use the `--as-of` flag to back-test specific
-   sessions (ISO8601 UTC timestamp).
+   sessions (ISO8601 UTC timestamp). Provide one or more `--scanner` arguments
+   to annotate the run with the named scanner definitions; use
+   `--list-scanners` to see the full catalogue before selecting.
 
 ### Using the Polygon.io provider
 
@@ -92,6 +95,16 @@ data through the Polygon v2/v3 REST APIs.
 - **Automated workflows** – The engine is designed to be called from Airflow,
   cron jobs, or chat bots. Consume the `ScreenerResult` objects directly for
   downstream automation.
+- **Scanner catalogue** – `screener/scanner_definitions.py` captures pre-defined
+  scanner bundles (Gainers, After-Hours Gainers, Gap-up, Golden Cross, Short
+  Squeeze, and more) as combinations of baseline queries with their default
+  parameters. Use `build_scanner_definitions()` to retrieve the full mapping and
+  `BASELINE_QUERIES` when you need the atomic building blocks for further
+  customization. At runtime you can pass `--list-scanners` to the CLI to see the
+  available labels, or add a top-level `scanners:` array in the configuration to
+  record which ones a run is meant to represent. When scanners are provided, the
+  console output includes both the standard table and a compact ticker list to
+  simplify downstream routing.
 
 ## Testing Without Market Data
 
