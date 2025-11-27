@@ -6,7 +6,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
 
 try:  # pragma: no cover - optional dependency
     import yaml
@@ -17,6 +17,7 @@ from .config import ScreenerConfig
 from .engine import ScreenerEngine
 from .factories import resolve_provider_factory
 from .reporting import render_table, summarize, write_csv_report
+from .scanner_definitions import build_scanner_definitions, validate_scanners
 
 
 def _configure_logging() -> None:
@@ -49,7 +50,45 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Override timestamp in ISO format (UTC). Defaults to now.",
     )
+    parser.add_argument(
+        "--scanner",
+        dest="scanners",
+        action="append",
+        default=None,
+        help=(
+            "Limit output to the named scanner(s). May be repeated or provided as a comma-separated list. "
+            "Omit to use scanners declared in the config (if any)."
+        ),
+    )
+    parser.add_argument(
+        "--list-scanners",
+        action="store_true",
+        help="Print available scanners and exit."
+    )
     return parser.parse_args(argv)
+
+
+def _normalise_scanner_args(raw: Sequence[str] | None) -> tuple[str, ...]:
+    if raw is None:
+        return tuple()
+    names: list[str] = []
+    for value in raw:
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        names.extend(parts)
+    return tuple(dict.fromkeys(names))
+
+
+def _render_scanner_catalogue() -> str:
+    catalogue = build_scanner_definitions()
+    validate_scanners(catalogue)
+    by_group: dict[str, list[str]] = {}
+    for scanner in catalogue.values():
+        by_group.setdefault(scanner.group, []).append(scanner.name)
+    lines: list[str] = ["Available scanners:"]
+    for group in sorted(by_group):
+        names = ", ".join(sorted(by_group[group]))
+        lines.append(f"- {group}: {names}")
+    return "\n".join(lines)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -57,8 +96,23 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     logger = logging.getLogger(__name__)
     args = parse_args(argv)
+
+    if args.list_scanners:
+        print(_render_scanner_catalogue())
+        return 0
+
     logger.info("Loading configuration", extra={"config_path": str(args.config)})
     config = load_config(args.config)
+
+    requested_scanners = _normalise_scanner_args(args.scanners) or config.scanners
+    if requested_scanners:
+        catalogue = build_scanner_definitions()
+        validate_scanners(catalogue)
+        missing = [name for name in requested_scanners if name not in catalogue]
+        if missing:
+            raise SystemExit(f"Unknown scanner(s): {', '.join(missing)}")
+        logger.info("Scanners selected", extra={"scanners": list(requested_scanners)})
+
     factory = resolve_provider_factory(config.data.provider)
     engine = ScreenerEngine(config, factory)
 
@@ -73,6 +127,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     display_results = results if max_results is None else results[:max_results]
     rows = [summarize(result) for result in display_results]
     print(render_table(rows))
+
+    if requested_scanners:
+        print()
+        print("Scanners:", ", ".join(requested_scanners))
+        tickers = ", ".join(result.symbol for result in display_results)
+        print(f"Tickers returned ({len(display_results)}): {tickers}")
 
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     output_filename = f"screener-results-{timestamp}.csv"

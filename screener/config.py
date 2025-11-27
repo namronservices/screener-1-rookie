@@ -127,12 +127,15 @@ class ScreenerConfig:
     criteria: ScreenerCriteria = field(default_factory=ScreenerCriteria)
     data: DataAcquisition = field(default_factory=DataAcquisition)
     max_concurrent_requests: int = 8
+    scanners: tuple[str, ...] = field(default_factory=tuple)
 
     def validate(self) -> None:
         self.universe
         self.criteria.validate()
         if self.max_concurrent_requests <= 0:
             raise ValueError("Concurrency must be positive")
+        if any(not name for name in self.scanners):
+            raise ValueError("Scanner names must be non-empty when provided")
 
     @classmethod
     def from_symbols(cls, symbols: Iterable[str], **overrides: object) -> "ScreenerConfig":
@@ -308,11 +311,19 @@ class ScreenerConfig:
             provider_options=dict(provider_options_map),
         )
 
+        scanners_raw = data.get("scanners", ())
+        if isinstance(scanners_raw, str):
+            scanners_raw = [part.strip() for part in scanners_raw.split(",") if part.strip()]
+        if not isinstance(scanners_raw, Iterable):
+            raise TypeError("scanners must be a string or iterable of strings when provided")
+        scanners = tuple(str(scanner).strip() for scanner in scanners_raw if str(scanner).strip())
+
         config = cls(
             universe=universe,
             criteria=criteria,
             data=data_config,
             max_concurrent_requests=int(data.get("max_concurrent_requests", 8)),
+            scanners=scanners,
         )
         config.validate()
         return config
