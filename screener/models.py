@@ -18,6 +18,8 @@ class PreMarketSnapshot:
     average_30_day_volume: int
     float_shares: int
     vwap: Optional[float]
+    sma_20: Optional[float] = None
+    sma_20_category: Optional[str] = None
 
     @property
     def gap_percent(self) -> float:
@@ -40,6 +42,14 @@ class PreMarketSnapshot:
         if self.vwap is None:
             return True
         return self.last_price >= self.vwap
+
+    @property
+    def sma_20_percent_diff(self) -> float | None:
+        """Percentage distance between the last price and the 20-day SMA."""
+
+        if self.sma_20 is None or self.sma_20 == 0:
+            return None
+        return (self.last_price - self.sma_20) / self.sma_20 * 100
 
 
 @dataclass(slots=True)

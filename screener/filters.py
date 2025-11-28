@@ -22,6 +22,8 @@ class Filter:
 def build_filters(criteria: ScreenerCriteria) -> Iterable[Filter]:
     volume_rules = criteria.volume
     gap_rules = criteria.gap
+    trend_rules = criteria.trend
+    preferred_categories = {cat.lower() for cat in trend_rules.preferred_categories}
 
     yield Filter(
         name="float_liquidity",
@@ -44,6 +46,38 @@ def build_filters(criteria: ScreenerCriteria) -> Iterable[Filter]:
             name="above_vwap",
             predicate=lambda snap: snap.is_above_vwap,
         )
+
+    def classify_trend(snapshot: PreMarketSnapshot) -> str:
+        diff = snapshot.sma_20_percent_diff
+        if diff is None:
+            snapshot.sma_20_category = "unknown"
+            return "unknown"
+
+        moderate = trend_rules.moderate_threshold_percent
+        strong = trend_rules.strong_threshold_percent
+
+        if diff >= strong:
+            category = "bullish"
+        elif diff >= moderate:
+            category = "moderate bullish"
+        elif diff <= -strong:
+            category = "bearish"
+        elif diff <= -moderate:
+            category = "moderate bearish"
+        else:
+            category = "sideways"
+
+        snapshot.sma_20_category = category
+        return category
+
+    def trend_predicate(snapshot: PreMarketSnapshot) -> bool:
+        category = classify_trend(snapshot)
+        return category in preferred_categories
+
+    yield Filter(
+        name="sma_20_trend",
+        predicate=trend_predicate,
+    )
 
 
 def apply_filters(snapshot: PreMarketSnapshot, filters: Iterable[Filter]) -> ScreenerResult:

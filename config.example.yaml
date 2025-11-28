@@ -14,6 +14,12 @@ criteria:
   gap:
     minimum_gap_percent: 3.5
     require_above_vwap: true
+  trend:
+    moderate_threshold_percent: 1.0
+    strong_threshold_percent: 3.0
+    preferred_categories:
+      - bullish
+      - bearish
   minimum_float_shares: 12000000
 data:
   provider: yfinance

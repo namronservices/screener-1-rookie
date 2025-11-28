@@ -44,11 +44,17 @@ def build_snapshot(
     thirty_day_volume_samples: Iterable[int],
     float_shares: int,
     intraday_bars: Sequence[HistoricalBar] | None,
+    daily_closes: Sequence[float] | None = None,
+    sma_prices: Sequence[float] | None = None,
 ) -> PreMarketSnapshot:
     """Factory that assembles a :class:`PreMarketSnapshot` with derived metrics."""
 
     average_volume = int(mean(thirty_day_volume_samples)) if thirty_day_volume_samples else 0
     vwap = compute_vwap(intraday_bars) if intraday_bars else None
+    closes = list(daily_closes) if daily_closes else []
+    sma_source = list(sma_prices) if sma_prices is not None else closes
+    sma_20 = mean(sma_source[-20:]) if len(sma_source) >= 20 else None
+
     return PreMarketSnapshot(
         symbol=symbol,
         timestamp=as_of,
@@ -58,4 +64,5 @@ def build_snapshot(
         average_30_day_volume=average_volume,
         float_shares=float_shares,
         vwap=vwap,
+        sma_20=sma_20,
     )
