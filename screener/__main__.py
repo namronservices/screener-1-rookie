@@ -16,8 +16,8 @@ except Exception:  # pragma: no cover - safe fallback
 from .config import ScreenerConfig
 from .engine import ScreenerEngine
 from .factories import resolve_provider_factory
-from .reporting import render_table, summarize, write_csv_report
-from .scanner_definitions import build_scanner_definitions, validate_scanners
+from .reporting import render_table, summarize, summarize_for_baselines, write_csv_report
+from .scanner_definitions import build_scanner_definitions, evaluate_scanner, validate_scanners
 
 
 def _configure_logging() -> None:
@@ -133,6 +133,19 @@ def main(argv: Iterable[str] | None = None) -> int:
         print("Scanners:", ", ".join(requested_scanners))
         tickers = ", ".join(result.symbol for result in display_results)
         print(f"Tickers returned ({len(display_results)}): {tickers}")
+
+        for scanner_name in requested_scanners:
+            scanner = catalogue[scanner_name]
+            print()
+            print(f"Results for scanner: {scanner.name}")
+            scanner_rows = []
+            for result in display_results:
+                if result.snapshot is None:
+                    scanner_rows.append(summarize(result))
+                    continue
+                baselines = evaluate_scanner(result.snapshot, scanner)
+                scanner_rows.append(summarize_for_baselines(result, baselines))
+            print(render_table(scanner_rows))
 
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     output_filename = f"screener-results-{timestamp}.csv"

@@ -9,7 +9,9 @@ without hard-coding the combinations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Mapping, Tuple
+from typing import Dict, Mapping, Sequence, Tuple
+
+from .models import PreMarketSnapshot
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,15 @@ class ScannerDefinition:
     group: str
     baselines: Tuple[BaselineQuery, ...]
     notes: str | None = None
+
+
+@dataclass(frozen=True)
+class BaselineOutcome:
+    """Result of evaluating a baseline query against a snapshot."""
+
+    key: str
+    passed: bool
+    reason: str
 
 
 BASELINE_QUERIES: Dict[str, BaselineQuery] = {
@@ -354,10 +365,67 @@ def validate_scanners(scanners: Mapping[str, ScannerDefinition] | None = None) -
                 )
 
 
+def _format_failure_reason(label: str, checks: Sequence[tuple[bool, str]]) -> str:
+    failures = [reason for passed, reason in checks if not passed]
+    if not failures:
+        return f"{label} satisfied"
+    return f"{label} failed: {', '.join(failures)}"
+
+
+def evaluate_baseline(snapshot: PreMarketSnapshot, baseline: BaselineQuery) -> BaselineOutcome:
+    """Check whether the snapshot satisfies a baseline query."""
+
+    params = baseline.parameters
+
+    if baseline.key == "premarket_gap":
+        min_gap_percent = float(params.get("min_gap_percent", 0.0))
+        require_above_vwap = bool(params.get("require_above_vwap", False))
+        meets_gap = snapshot.gap_percent >= min_gap_percent
+        meets_vwap = (not require_above_vwap) or snapshot.is_above_vwap
+        passed = meets_gap and meets_vwap
+        reason = _format_failure_reason(
+            "Gap", [
+                (meets_gap, f"gap<{min_gap_percent:.2f}%"),
+                (meets_vwap, "below VWAP"),
+            ],
+        )
+        return BaselineOutcome(key=baseline.key, passed=passed, reason=reason)
+
+    if baseline.key == "premarket_liquidity":
+        min_rel_vol = float(params.get("min_relative_volume", 0.0))
+        min_abs_vol = int(params.get("min_absolute_volume", 0))
+        meets_rel = snapshot.relative_volume >= min_rel_vol
+        meets_abs = snapshot.premarket_volume >= min_abs_vol
+        passed = meets_rel and meets_abs
+        reason = _format_failure_reason(
+            "Liquidity", [
+                (meets_rel, f"rel_vol<{min_rel_vol:.2f}"),
+                (meets_abs, f"volume<{min_abs_vol:,}"),
+            ],
+        )
+        return BaselineOutcome(key=baseline.key, passed=passed, reason=reason)
+
+    return BaselineOutcome(
+        key=baseline.key,
+        passed=False,
+        reason="baseline evaluation not supported by available snapshot data",
+    )
+
+
+def evaluate_scanner(snapshot: PreMarketSnapshot, scanner: ScannerDefinition) -> Tuple[BaselineOutcome, ...]:
+    """Evaluate all baselines for a scanner against a snapshot."""
+
+    outcomes = tuple(evaluate_baseline(snapshot, baseline) for baseline in scanner.baselines)
+    return outcomes
+
+
 __all__ = [
     "BaselineQuery",
     "ScannerDefinition",
+    "BaselineOutcome",
     "BASELINE_QUERIES",
     "build_scanner_definitions",
     "validate_scanners",
+    "evaluate_baseline",
+    "evaluate_scanner",
 ]

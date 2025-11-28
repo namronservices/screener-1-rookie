@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .models import PreMarketSnapshot, ScreenerResult
+from .scanner_definitions import BaselineOutcome
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,29 @@ def summarize(result: ScreenerResult) -> ReportRow:
     snapshot = result.snapshot
     failing = [name for name, passed in result.passed_filters.items() if not passed]
     notes = "PASS" if not failing else "Fail: " + ", ".join(sorted(failing))
+    return ReportRow(
+        symbol=snapshot.symbol,
+        gap_percent=round(snapshot.gap_percent, 2),
+        premarket_volume=snapshot.premarket_volume,
+        relative_volume=round(snapshot.relative_volume, 2),
+        float_shares=snapshot.float_shares,
+        notes=notes,
+    )
+
+
+def summarize_for_baselines(result: ScreenerResult, baselines: tuple[BaselineOutcome, ...]) -> ReportRow:
+    """Summarize a screener result with baseline validation details."""
+
+    if result.error:
+        return summarize(result)
+
+    failing = [baseline for baseline in baselines if not baseline.passed]
+    notes = "PASS" if not failing else "Fail baselines: " + ", ".join(
+        f"{baseline.key} ({baseline.reason})" for baseline in failing
+    )
+
+    assert result.snapshot is not None
+    snapshot = result.snapshot
     return ReportRow(
         symbol=snapshot.symbol,
         gap_percent=round(snapshot.gap_percent, 2),
